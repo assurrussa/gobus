@@ -6,7 +6,7 @@ A simple and easy to plug-in command bus for Go.
 
 Use go get.
 ```sh
-$ github.com/assurrussa/gobus
+$ go get github.com/assurrussa/gobus@v0.9.0
 ```
 
 Then import the package into your own code:
