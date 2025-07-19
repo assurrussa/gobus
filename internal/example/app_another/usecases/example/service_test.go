@@ -24,11 +24,12 @@ func TestService_Handle(t *testing.T) {
 	mockHandlerLucky := mocksgobus.NewMockResultCommandExecutor[lucky.In, lucky.Out](ctrl)
 	mockHandlerLiveAsync := mocksgobus.NewMockResultCommandExecutor[liveasync.In, liveasync.Out](ctrl)
 	mockHandlerLiveAsync2 := mocksgobus.NewMockCommandExecutor[liveasync.InAsync](ctrl)
-	gobus.RegisterResult[examplein.LiveIn, examplein.LiveOut](mockHandlerLive)
-	gobus.RegisterResult[lucky.In, lucky.Out](mockHandlerLucky)
-	gobus.RegisterResult[liveasync.In, liveasync.Out](mockHandlerLiveAsync)
-	gobus.Register[liveasync.InAsync](mockHandlerLiveAsync2)
-	s := example.Service{}
+	bus := gobus.New()
+	bus.RegisterResult(mockHandlerLive)
+	bus.RegisterResult(mockHandlerLucky)
+	bus.RegisterResult(mockHandlerLiveAsync)
+	bus.Register(mockHandlerLiveAsync2)
+	s := example.NewService(bus)
 
 	mockHandlerLive.EXPECT().Execute(ctx, examplein.LiveIn{Val: 1234}).Return(examplein.LiveOut{Val: 1235}, nil).Times(1)
 	mockHandlerLucky.EXPECT().Execute(ctx, lucky.In{Val: "1235"}).Return(lucky.Out{Val: "1236"}, nil).Times(1)

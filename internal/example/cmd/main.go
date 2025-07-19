@@ -11,7 +11,6 @@ import (
 	"github.com/assurrussa/gobus"
 	"github.com/assurrussa/gobus/internal/example/api"
 	exampleusecaseliveadapter "github.com/assurrussa/gobus/internal/example/app/adapter/usecases/live"
-	examplein "github.com/assurrussa/gobus/internal/example/app/application/port/in"
 	exampleusecaselive "github.com/assurrussa/gobus/internal/example/app/application/usecases/live"
 	"github.com/assurrussa/gobus/internal/example/app_another/commands/liveasync"
 	"github.com/assurrussa/gobus/internal/example/app_another/commands/lucky"
@@ -23,16 +22,17 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	bus := gobus.New()
 	useCaseLive := exampleusecaselive.NewHandler(3)
 	adapterUseCaseLive := exampleusecaseliveadapter.NewAdapter(useCaseLive)
-	gobus.RegisterResult[examplein.LiveIn, examplein.LiveOut](adapterUseCaseLive)
-	gobus.RegisterResult[lucky.In, lucky.Out](lucky.NewHandler("test"))
-	gobus.RegisterResult[liveasync.In, liveasync.Out](liveasync.NewHandler(1234))
-	gobus.Register[liveasync.InAsync](liveasync.NewHandlerAsync(234, logger))
+	bus.RegisterResult(adapterUseCaseLive)
+	bus.RegisterResult(lucky.NewHandler("test"))
+	bus.RegisterResult(liveasync.NewHandler(1234))
+	bus.Register(liveasync.NewHandlerAsync(234, logger))
 
 	rw := httptest.NewRecorder()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
-	api.NewExampleController(&example.Service{}, logger).ExampleHandler()(rw, req)
+	api.NewExampleController(example.NewService(bus), logger).ExampleHandler()(rw, req)
 
 	response := rw.Result()
 	defer func() { _ = response.Body.Close() }()

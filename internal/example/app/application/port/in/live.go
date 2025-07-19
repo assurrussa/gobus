@@ -11,5 +11,5 @@ type LiveOut struct {
 }
 
 type LiveHandler interface {
-	Handle(context.Context, LiveIn) (LiveOut, error)
+	Handle(ctx context.Context, in LiveIn) (LiveOut, error)
 }

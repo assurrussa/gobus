@@ -9,16 +9,21 @@ import (
 	bus "github.com/assurrussa/gobus/internal/performance/buscontract"
 )
 
+const (
+	testValueIn     = "test"
+	testValueHandle = "handle"
+)
+
 func TestBus_Handle(t *testing.T) {
 	ctx := context.Background()
-	bus.Register[testIn, testOut](testIn{}, &testHandle{val: "handle"})
-	bus.Register[*testInPointer, *testOut](&testInPointer{}, &testHandle2{val: "handle"})
+	bus.Register[testIn, testOut](testIn{}, &testHandle{val: testValueHandle})
+	bus.Register[*testInPointer, *testOut](&testInPointer{}, &testHandle2{val: testValueHandle})
 
-	out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: "test", index: 1})
+	out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: testValueIn, index: 1})
 	checkNoError(t, err)
 	checkEqual(t, "test_handle", out.value)
 
-	outPointer, err := bus.Dispatch[*testInPointer, *testOut](ctx, &testInPointer{value: "test", index: 1})
+	outPointer, err := bus.Dispatch[*testInPointer, *testOut](ctx, &testInPointer{value: testValueIn, index: 1})
 	checkNoError(t, err)
 	checkEqual(t, "test_handle", outPointer.value)
 
@@ -28,7 +33,7 @@ func TestBus_Handle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			bus.Register[testIn, testOut](testIn{}, &testHandle{val: "handle"})
+			bus.Register[testIn, testOut](testIn{}, &testHandle{val: testValueHandle})
 		}()
 	}
 
@@ -37,7 +42,7 @@ func TestBus_Handle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: "test", index: i})
+			out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: testValueIn, index: i})
 			checkNoError(t, err)
 			checkEqual(t, "test_handle", out.value)
 		}()
@@ -48,7 +53,7 @@ func TestBus_Handle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out := <-bus.DispatchAsync[testIn, testOut](ctx, testIn{value: "test", index: i})
+			out := <-bus.DispatchAsync[testIn, testOut](ctx, testIn{value: testValueIn, index: i})
 			checkNoError(t, out.Error)
 			checkEqual(t, "test_handle", out.Result.value)
 		}()
@@ -60,7 +65,7 @@ func TestBus_Handle(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errExpect := errors.New("test error")
-			out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: "test", index: i, err: errExpect})
+			out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: testValueIn, index: i, err: errExpect})
 			checkError(t, err, errExpect)
 			checkEqual(t, "", out.value)
 		}()
@@ -69,35 +74,29 @@ func TestBus_Handle(t *testing.T) {
 	wg.Wait()
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// BenchmarkRegister-16             6823029               164.5 ns/op           360 B/op          4 allocs/op
+// Go 1.27.0, median of 5 runs.
 // goos: darwin
 // goarch: arm64
-// cpu: Apple M1
-// BenchmarkRegister-8      5781318               200.1 ns/op           360 B/op          4 allocs/op
+// cpu: Apple M5 Pro
+// BenchmarkRegister-12     18988856        61.69 ns/op       360 B/op       4 allocs/op.
 
 func BenchmarkRegister(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		bus.Register[testIn, testOut](testIn{}, &testHandle{val: "handle"})
+		bus.Register[testIn, testOut](testIn{}, &testHandle{val: testValueHandle})
 	}
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// BenchmarkDispatch-16            34229446                33.52 ns/op           16 B/op          1 allocs/op
+// Go 1.27.0, median of 5 runs.
 // goos: darwin
 // goarch: arm64
-// cpu: Apple M1
-// BenchmarkDispatch-8     23980215                49.13 ns/op           16 B/op          1 allocs/op.
+// cpu: Apple M5 Pro
+// BenchmarkDispatch-12     55050921        20.49 ns/op        16 B/op       1 allocs/op.
 func BenchmarkDispatch(b *testing.B) {
 	ctx := context.Background()
-	bus.Register[testIn, testOut](testIn{}, &testHandle{val: "handle"})
+	bus.Register[testIn, testOut](testIn{}, &testHandle{val: testValueHandle})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = bus.Dispatch[testIn, testOut](ctx, testIn{value: "test", index: i})
+		_, _ = bus.Dispatch[testIn, testOut](ctx, testIn{value: testValueIn, index: i})
 	}
 }
 
