@@ -1,7 +1,7 @@
 package gobus
 
-type ObjectIn interface {
-}
+// ObjectIn is the constraint accepted by command and query inputs.
+type ObjectIn any
 
-type ObjectOut interface {
-}
+// ObjectOut is the constraint accepted by query results.
+type ObjectOut any

@@ -9,28 +9,35 @@ import (
 	"github.com/assurrussa/gobus"
 )
 
+const (
+	allocationRuns          = 1000
+	maxResultDispatchAllocs = 1
+	testValueIn             = "test-in"
+	testValueHandle         = "test-handle"
+)
+
 func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 	ctx := context.Background()
-	gobus.InitResultCommand()
+	bus := gobus.New()
 
-	out, err := gobus.DispatchResult[testIn, testOut](ctx, testIn{value: "test", index: 1})
-	checkError(t, err, nil)
+	out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: 1})
+	checkError(t, err, gobus.ErrHandlerNotFound)
 	checkEqual(t, "", out.value)
 
-	outAsyncEnvelope := <-gobus.DispatchResultAsync[testIn, testOut](ctx, testIn{value: "test", index: 1})
-	checkError(t, outAsyncEnvelope.Error, nil)
+	outAsyncEnvelope := <-bus.DispatchResultAsync[testOut](ctx, testIn{value: testValueIn, index: 1})
+	checkError(t, outAsyncEnvelope.Error, gobus.ErrHandlerNotFound)
 	checkEqual(t, "", outAsyncEnvelope.Result.value)
 
-	gobus.RegisterResult[testIn, testOut](&testHandle{val: "handle"})
-	gobus.RegisterResult[*testIn, *testOut](&testHandle2{val: "handle"})
+	bus.RegisterResult(&testHandle{val: testValueHandle})
+	bus.RegisterResult(&testHandle2{val: testValueHandle})
 
-	out, err = gobus.DispatchResult[testIn, testOut](ctx, testIn{value: "test", index: 1})
+	out, err = bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: 1})
 	checkNoError(t, err)
-	checkEqual(t, "test_handle", out.value)
+	checkEqual(t, "test-in_test-handle", out.value)
 
-	outPointer, err := gobus.DispatchResult[*testIn, *testOut](ctx, &testIn{value: "test", index: 1})
+	outPointer, err := bus.DispatchResult[*testOut](ctx, &testIn{value: testValueIn, index: 1})
 	checkNoError(t, err)
-	checkEqual(t, "test_handle", outPointer.value)
+	checkEqual(t, "test-in_test-handle", outPointer.value)
 
 	wg := sync.WaitGroup{}
 
@@ -38,7 +45,7 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			gobus.RegisterResult[testIn, testOut](&testHandle{val: "handle"})
+			bus.RegisterResult(&testHandle{val: testValueHandle})
 		}()
 	}
 
@@ -47,9 +54,9 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out, err := gobus.DispatchResult[testIn, testOut](ctx, testIn{value: "test", index: i})
+			out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: i})
 			checkNoError(t, err)
-			checkEqual(t, "test_handle", out.value)
+			checkEqual(t, "test-in_test-handle", out.value)
 		}()
 	}
 
@@ -58,9 +65,9 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out := <-gobus.DispatchResultAsync[testIn, testOut](ctx, testIn{value: "test", index: i})
+			out := <-bus.DispatchResultAsync[testOut](ctx, testIn{value: testValueIn, index: i})
 			checkNoError(t, out.Error)
-			checkEqual(t, "test_handle", out.Result.value)
+			checkEqual(t, "test-in_test-handle", out.Result.value)
 		}()
 	}
 
@@ -70,7 +77,7 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errExpect := errors.New("test error")
-			out, err := gobus.DispatchResult[testIn, testOut](ctx, testIn{value: "test", index: i, err: errExpect})
+			out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: i, err: errExpect})
 			checkError(t, err, errExpect)
 			checkEqual(t, "", out.value)
 		}()
@@ -79,34 +86,138 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 	wg.Wait()
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// Benchmark_RegisterResult-16             6620785               176.6 ns/op           360 B/op          4 allocs/op
-// goos: darwin
-// goarch: arm64
-// cpu: Apple M1
-// Benchmark_RegisterResult-8      5569047               208.8 ns/op           360 B/op          4 allocs/op.
-func Benchmark_RegisterResult(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		gobus.RegisterResult[testIn, testOut](&testHandle{val: "handle"})
+func TestBus_ResultHandlersAreIsolated(t *testing.T) {
+	ctx := context.Background()
+	firstBus := gobus.New()
+	secondBus := gobus.New()
+	firstBus.RegisterResult(&testHandle{val: "first"})
+	secondBus.RegisterResult(&testHandle{val: "second"})
+
+	first, err := firstBus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	checkNoError(t, err)
+	checkEqual(t, "test-in_first", first.value)
+
+	second, err := secondBus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	checkNoError(t, err)
+	checkEqual(t, "test-in_second", second.value)
+}
+
+func TestBus_ResultHandlerRegistrationReplacesSameTypePair(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.RegisterResult(&testHandle{val: "first"})
+	bus.RegisterResult(&testHandle{val: "second"})
+
+	out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	checkNoError(t, err)
+	checkEqual(t, "test-in_second", out.value)
+}
+
+func TestBus_ResultHandlersWithSameInputAndDifferentOutputsCoexist(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.RegisterResult(&testHandle{val: testValueHandle})
+	bus.RegisterResult(&testStringHandle{val: testValueHandle})
+
+	structOut, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	checkNoError(t, err)
+	checkEqual(t, "test-in_test-handle", structOut.value)
+
+	stringOut, err := bus.DispatchResult[string](ctx, testIn{value: testValueIn})
+	checkNoError(t, err)
+	checkEqual(t, "test-in_test-handle", stringOut)
+}
+
+func TestBus_ResultHandlerRejectsWrongOutputType(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.RegisterResult(&testHandle{val: testValueHandle})
+
+	out, err := bus.DispatchResult[int](ctx, testIn{value: testValueIn})
+	checkError(t, err, gobus.ErrHandlerNotFound)
+	checkEqual(t, 0, out)
+}
+
+func TestBus_ConcurrentResultRegistrationsPreserveDistinctHandlers(t *testing.T) {
+	ctx := context.Background()
+
+	for range 1000 {
+		bus := gobus.New()
+		start := make(chan struct{})
+		wg := sync.WaitGroup{}
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			bus.RegisterResult(&testHandle{val: testValueHandle})
+		}()
+
+		go func() {
+			defer wg.Done()
+			<-start
+			bus.RegisterResult(&testStringHandle{val: testValueHandle})
+		}()
+
+		close(start)
+		wg.Wait()
+
+		_, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+		checkNoError(t, err)
+		_, err = bus.DispatchResult[string](ctx, testIn{value: testValueIn})
+		checkNoError(t, err)
 	}
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// Benchmark_DispatchResult-16            29745181                39.07 ns/op           16 B/op          1 allocs/op
+func TestBus_DispatchResultAllocationBudget(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.RegisterResult(&testHandle{val: testValueHandle})
+
+	var (
+		out         testOut
+		dispatchErr error
+	)
+	allocations := testing.AllocsPerRun(allocationRuns, func() {
+		out, dispatchErr = bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	})
+	checkNoError(t, dispatchErr)
+	checkEqual(t, "test-in_test-handle", out.value)
+
+	if allocations > maxResultDispatchAllocs {
+		t.Fatalf(
+			"DispatchResult allocations = %v, want at most %d",
+			allocations,
+			maxResultDispatchAllocs,
+		)
+	}
+}
+
+// Go 1.27.0, median of 5 runs.
 // goos: darwin
 // goarch: arm64
-// cpu: Apple M1
-// Benchmark_DispatchResult-8     20793022                56.82 ns/op           16 B/op          1 allocs/op.
+// cpu: Apple M5 Pro
+// Benchmark_RegisterResult-12     15822766        70.81 ns/op       360 B/op       4 allocs/op.
+func Benchmark_RegisterResult(b *testing.B) {
+	bus := gobus.New()
+
+	for i := 0; i < b.N; i++ {
+		bus.RegisterResult(&testHandle{val: testValueHandle})
+	}
+}
+
+// Go 1.27.0, median of 5 runs.
+// goos: darwin
+// goarch: arm64
+// cpu: Apple M5 Pro
+// Benchmark_DispatchResult-12     57087354        22.26 ns/op        24 B/op       1 allocs/op.
 func Benchmark_DispatchResult(b *testing.B) {
 	ctx := context.Background()
-	gobus.RegisterResult[testIn, testOut](&testHandle{val: "handle"})
+	bus := gobus.New()
+	bus.RegisterResult(&testHandle{val: testValueHandle})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = gobus.DispatchResult[testIn, testOut](ctx, testIn{value: "test", index: i})
+		_, _ = bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: i})
 	}
 }
 
@@ -132,6 +243,14 @@ func (h *testHandle2) Execute(_ context.Context, dto *testIn) (*testOut, error) 
 	}
 
 	return &testOut{value: dto.value + "_" + h.val}, nil
+}
+
+type testStringHandle struct {
+	val string
+}
+
+func (h *testStringHandle) Execute(_ context.Context, dto testIn) (string, error) {
+	return dto.value + "_" + h.val, nil
 }
 
 type testIn struct {

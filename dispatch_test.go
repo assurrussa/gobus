@@ -11,21 +11,21 @@ import (
 
 func TestBus_CommandExecutor_ExecuteComplex(t *testing.T) {
 	ctx := context.Background()
-	gobus.InitCommand()
+	bus := gobus.New()
 
-	err := gobus.Dispatch[testIn](ctx, testIn{value: "test", index: 1})
-	checkError(t, err, nil)
+	err := bus.Dispatch(ctx, testIn{value: testValueIn, index: 1})
+	checkError(t, err, gobus.ErrHandlerNotFound)
 
-	err = <-gobus.DispatchAsync[testIn](ctx, testIn{value: "test", index: 1})
-	checkError(t, err, nil)
+	err = <-bus.DispatchAsync(ctx, testIn{value: testValueIn, index: 1})
+	checkError(t, err, gobus.ErrHandlerNotFound)
 
-	gobus.Register[testIn](&testHandleCommand{})
-	gobus.Register[*testIn](&testHandleCommand2{})
+	bus.Register(&testHandleCommand{})
+	bus.Register(&testHandleCommand2{})
 
-	err = gobus.Dispatch[testIn](ctx, testIn{value: "test", index: 1})
+	err = bus.Dispatch(ctx, testIn{value: testValueIn, index: 1})
 	checkNoError(t, err)
 
-	err = gobus.Dispatch[*testIn](ctx, &testIn{value: "test", index: 1})
+	err = bus.Dispatch(ctx, &testIn{value: testValueIn, index: 1})
 	checkNoError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -34,7 +34,7 @@ func TestBus_CommandExecutor_ExecuteComplex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			gobus.Register[testIn](&testHandleCommand{})
+			bus.Register(&testHandleCommand{})
 		}()
 	}
 
@@ -43,7 +43,7 @@ func TestBus_CommandExecutor_ExecuteComplex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := gobus.Dispatch[testIn](ctx, testIn{value: "test", index: i})
+			err := bus.Dispatch(ctx, testIn{value: testValueIn, index: i})
 			checkNoError(t, err)
 		}()
 	}
@@ -53,7 +53,7 @@ func TestBus_CommandExecutor_ExecuteComplex(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := <-gobus.DispatchAsync[testIn](ctx, testIn{value: "test", index: i})
+			err := <-bus.DispatchAsync(ctx, testIn{value: testValueIn, index: i})
 			checkNoError(t, err)
 		}()
 	}
@@ -64,7 +64,7 @@ func TestBus_CommandExecutor_ExecuteComplex(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errExpect := errors.New("test error")
-			err := gobus.Dispatch[testIn](ctx, testIn{value: "test", index: i, err: errExpect})
+			err := bus.Dispatch(ctx, testIn{value: testValueIn, index: i, err: errExpect})
 			checkError(t, err, errExpect)
 		}()
 	}
@@ -72,34 +72,116 @@ func TestBus_CommandExecutor_ExecuteComplex(t *testing.T) {
 	wg.Wait()
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// Benchmark_Register-16      7917388               150.2 ns/op           344 B/op          3 allocs/op
-// goos: darwin
-// goarch: arm64
-// cpu: Apple M1
-// Benchmark_Register-8.
-func Benchmark_Register(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		gobus.Register[testIn](&testHandleCommand{})
+func TestBus_ConcurrentRegistrationsPreserveDistinctHandlers(t *testing.T) {
+	ctx := context.Background()
+
+	for range 1000 {
+		bus := gobus.New()
+		start := make(chan struct{})
+		wg := sync.WaitGroup{}
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			bus.Register(&testHandleCommand{})
+		}()
+
+		go func() {
+			defer wg.Done()
+			<-start
+			bus.Register(&testHandleCommand2{})
+		}()
+
+		close(start)
+		wg.Wait()
+
+		checkNoError(t, bus.Dispatch(ctx, testIn{}))
+		checkNoError(t, bus.Dispatch(ctx, &testIn{}))
 	}
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// Benchmark_Dispatch-16     85649173                13.85 ns/op            0 B/op          0 allocs/op
+func TestBus_CommandHandlersAreIsolated(t *testing.T) {
+	ctx := context.Background()
+	firstBus := gobus.New()
+	secondBus := gobus.New()
+	firstCalled := false
+	secondCalled := false
+	firstBus.Register(&testTrackingCommandHandler{called: &firstCalled})
+	secondBus.Register(&testTrackingCommandHandler{called: &secondCalled})
+
+	checkNoError(t, firstBus.Dispatch(ctx, testIn{}))
+	if !firstCalled {
+		t.Fatal("first bus handler was not called")
+	}
+	if secondCalled {
+		t.Fatal("second bus handler was called by first bus")
+	}
+
+	checkNoError(t, secondBus.Dispatch(ctx, testIn{}))
+	if !secondCalled {
+		t.Fatal("second bus handler was not called")
+	}
+}
+
+func TestBus_DispatchAsyncReturnsExactlyOneResult(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.Register(&testHandleCommand{})
+
+	result := bus.DispatchAsync(ctx, testIn{})
+	err, ok := <-result
+	if !ok {
+		t.Fatal("async result channel closed before yielding a result")
+	}
+	checkNoError(t, err)
+
+	if _, ok = <-result; ok {
+		t.Fatal("async result channel yielded more than one result")
+	}
+}
+
+func TestBus_DispatchAllocationBudget(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.Register(&testHandleCommand{})
+
+	var dispatchErr error
+	allocations := testing.AllocsPerRun(allocationRuns, func() {
+		dispatchErr = bus.Dispatch(ctx, testIn{value: testValueIn})
+	})
+	checkNoError(t, dispatchErr)
+
+	if allocations != 0 {
+		t.Fatalf("Dispatch allocations = %v, want 0", allocations)
+	}
+}
+
+// Go 1.27.0, median of 5 runs.
 // goos: darwin
 // goarch: arm64
-// cpu: Apple M1
-// Benchmark_Dispatch-8.
+// cpu: Apple M5 Pro
+// Benchmark_Register-12     19829042        69.92 ns/op       344 B/op       3 allocs/op.
+func Benchmark_Register(b *testing.B) {
+	bus := gobus.New()
+
+	for i := 0; i < b.N; i++ {
+		bus.Register(&testHandleCommand{})
+	}
+}
+
+// Go 1.27.0, median of 5 runs.
+// goos: darwin
+// goarch: arm64
+// cpu: Apple M5 Pro
+// Benchmark_Dispatch-12     123828987        9.683 ns/op        0 B/op       0 allocs/op.
 func Benchmark_Dispatch(b *testing.B) {
 	ctx := context.Background()
-	gobus.Register[testIn](&testHandleCommand{})
+	bus := gobus.New()
+	bus.Register(&testHandleCommand{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = gobus.Dispatch[testIn](ctx, testIn{value: "test", index: i})
+		_ = bus.Dispatch(ctx, testIn{value: testValueIn, index: i})
 	}
 }
 
@@ -119,6 +201,16 @@ func (h *testHandleCommand2) Execute(_ context.Context, dto *testIn) error {
 	if dto.err != nil {
 		return dto.err
 	}
+
+	return nil
+}
+
+type testTrackingCommandHandler struct {
+	called *bool
+}
+
+func (h *testTrackingCommandHandler) Execute(_ context.Context, _ testIn) error {
+	*h.called = true
 
 	return nil
 }

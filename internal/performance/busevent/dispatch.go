@@ -58,7 +58,7 @@ func (c *CommandEvent) Dispatch(ctx context.Context, dto ObjectIn, out any) erro
 
 	if out != nil {
 		v := reflect.ValueOf(out)
-		if v.Kind() == reflect.Ptr {
+		if v.Kind() == reflect.Pointer {
 			v.Elem().Set(reflect.ValueOf(res))
 		}
 	}
