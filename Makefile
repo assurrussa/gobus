@@ -1,13 +1,15 @@
 .DEFAULT_GOAL := check
 UNIT_COVERAGE_MIN := 90
+.PHONY: check fmt lint vet test test-race test-checkptr test-consumer test-consumer-release cover-html cover bench-all
 
-check: fmt vet lint test test-race cover-html cover
+check: fmt vet lint test test-race test-checkptr test-consumer cover-html cover
 
 fmt:
 	go fmt ./...
+	go -C ./testdata/consumer fmt ./...
 
 lint:
-	golangci-lint run -v --fix --timeout=5m ./...
+	golangci-lint run -v --timeout=5m ./...
 
 vet:
 	go vet ./...
@@ -17,6 +19,15 @@ test:
 
 test-race:
 	go test -race -count=5 ./...
+
+test-checkptr:
+	go test -gcflags=all=-d=checkptr=2 .
+
+test-consumer:
+	go -C ./testdata/consumer test ./...
+
+test-consumer-release:
+	sh ./scripts/test-release-consumer.sh "$(VERSION)"
 
 cover-html:
 	@go test -coverprofile=./coverage.text -covermode=atomic $(shell go list ./...)
@@ -35,4 +46,4 @@ cover:
     	fi
 
 bench-all:
-	go test -bench=. -benchmem ./...
+	go test -run '^$$' -bench=. -benchmem -cpu=12 -count=5 ./...

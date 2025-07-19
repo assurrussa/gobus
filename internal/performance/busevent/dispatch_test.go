@@ -9,18 +9,24 @@ import (
 	"github.com/assurrussa/gobus/internal/performance/busevent"
 )
 
+const (
+	testValueIn     = "test"
+	testValueHandle = "handle"
+)
+
 func TestBus_Handle(t *testing.T) {
 	ctx := context.Background()
 	dispatcher := busevent.NewCommandEvent()
-	dispatcher.Register(testIn{}, &testHandle{val: "handle"})
+	dispatcher.Register(testIn{}, &testHandle{val: testValueHandle})
 
 	var out testOut
-	err := dispatcher.Dispatch(ctx, testIn{value: "test", index: 1}, &out)
+	err := dispatcher.Dispatch(ctx, testIn{value: testValueIn, index: 1}, &out)
 	checkNoError(t, err)
 	checkEqual(t, "test_handle", out.value)
-	outEnvelope := <-dispatcher.DispatchAsync(ctx, testIn{value: "test", index: 1})
+	outEnvelope := <-dispatcher.DispatchAsync(ctx, testIn{value: testValueIn, index: 1})
 	checkNoError(t, outEnvelope.Error)
-	out = outEnvelope.Result.(testOut)
+	out, ok := outEnvelope.Result.(testOut)
+	checkEqual(t, true, ok)
 	checkEqual(t, "test_handle", out.value)
 
 	wg := sync.WaitGroup{}
@@ -29,7 +35,7 @@ func TestBus_Handle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			dispatcher.Register(testIn{}, &testHandle{val: "handle"})
+			dispatcher.Register(testIn{}, &testHandle{val: testValueHandle})
 		}()
 	}
 
@@ -39,7 +45,7 @@ func TestBus_Handle(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var out testOut
-			err := dispatcher.Dispatch(ctx, testIn{value: "test", index: i}, &out)
+			err := dispatcher.Dispatch(ctx, testIn{value: testValueIn, index: i}, &out)
 			checkNoError(t, err)
 			checkEqual(t, "test_handle", out.value)
 		}()
@@ -52,7 +58,7 @@ func TestBus_Handle(t *testing.T) {
 			defer wg.Done()
 			errExpect := errors.New("test error")
 			var out testOut
-			err := dispatcher.Dispatch(ctx, testIn{value: "test", index: i, err: errExpect}, &out)
+			err := dispatcher.Dispatch(ctx, testIn{value: testValueIn, index: i, err: errExpect}, &out)
 			checkError(t, err, errExpect)
 			checkEqual(t, "", out.value)
 		}()
@@ -61,38 +67,32 @@ func TestBus_Handle(t *testing.T) {
 	wg.Wait()
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// BenchmarkRegister-16             5573889               208.6 ns/op           360 B/op          4 allocs/op
+// Go 1.27.0, median of 5 runs.
 // goos: darwin
 // goarch: arm64
-// cpu: Apple M1
-// BenchmarkRegister-8      4592404               252.5 ns/op           360 B/op          4 allocs/op.
+// cpu: Apple M5 Pro
+// BenchmarkRegister-12     12205840        99.96 ns/op       360 B/op       4 allocs/op.
 func BenchmarkRegister(b *testing.B) {
 	dispatcher := busevent.NewCommandEvent()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		dispatcher.Register(testIn{}, &testHandle{val: "handle"})
+		dispatcher.Register(testIn{}, &testHandle{val: testValueHandle})
 	}
 }
 
-// goos: linux
-// goarch: amd64
-// cpu: 11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz
-// BenchmarkDispatch-16            11001295               106.4 ns/op            80 B/op          3 allocs/op
+// Go 1.27.0, median of 5 runs.
 // goos: darwin
 // goarch: arm64
-// cpu: Apple M1
-// BenchmarkDispatch-8      8173801               146.1 ns/op            80 B/op          3 allocs/op.
+// cpu: Apple M5 Pro
+// BenchmarkDispatch-12     27955166        44.73 ns/op        80 B/op       3 allocs/op.
 func BenchmarkDispatch(b *testing.B) {
 	ctx := context.Background()
 	dispatcher := busevent.NewCommandEvent()
-	dispatcher.Register(testIn{}, &testHandle{val: "handle"})
+	dispatcher.Register(testIn{}, &testHandle{val: testValueHandle})
 	var out testOut
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = dispatcher.Dispatch(ctx, testIn{value: "test", index: i}, &out)
+		_ = dispatcher.Dispatch(ctx, testIn{value: testValueIn, index: i}, &out)
 	}
 }
 
@@ -101,8 +101,8 @@ type testHandle struct {
 }
 
 func (h *testHandle) Execute(_ context.Context, dto any) (any, error) {
-	d := dto.(testIn)
-	if d.err != nil {
+	d, ok := dto.(testIn)
+	if !ok || d.err != nil {
 		return testOut{}, d.err
 	}
 

@@ -21,6 +21,7 @@ import (
 type MockResultCommandExecutor[Q gobus.ObjectIn, T gobus.ObjectOut] struct {
 	ctrl     *gomock.Controller
 	recorder *MockResultCommandExecutorMockRecorder[Q, T]
+	isgomock struct{}
 }
 
 // MockResultCommandExecutorMockRecorder is the mock recorder for MockResultCommandExecutor.
@@ -59,6 +60,7 @@ func (mr *MockResultCommandExecutorMockRecorder[Q, T]) Execute(ctx, dto any) *go
 type MockCommandExecutor[Q gobus.ObjectIn] struct {
 	ctrl     *gomock.Controller
 	recorder *MockCommandExecutorMockRecorder[Q]
+	isgomock struct{}
 }
 
 // MockCommandExecutorMockRecorder is the mock recorder for MockCommandExecutor.
