@@ -25,13 +25,11 @@ public handler contracts.
 
 GoBus requires Go 1.27 or later because its API uses generic methods.
 
-The instance-based API documented here has not been published as a version tag yet.
-`v0.9.1` contains the legacy package-level API. Until a Go 1.27 release is tagged,
-consume a reviewed commit or pseudo-version. After publication, install the explicit
-release version:
+The instance-based API is available starting with `v1.0.0`.
+`v0.9.1` contains the legacy package-level API.
 
 ```sh
-go get github.com/assurrussa/gobus@vX.Y.Z
+go get github.com/assurrussa/gobus@v1.0.0
 ```
 
 Then import the package:
