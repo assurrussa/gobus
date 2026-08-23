@@ -93,3 +93,41 @@ func (mr *MockCommandExecutorMockRecorder[Q]) Execute(ctx, dto any) *gomock.Call
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Execute", reflect.TypeOf((*MockCommandExecutor[Q])(nil).Execute), ctx, dto)
 }
+
+// MockEventExecutor is a mock of EventExecutor interface.
+type MockEventExecutor[E gobus.ObjectIn] struct {
+	ctrl     *gomock.Controller
+	recorder *MockEventExecutorMockRecorder[E]
+	isgomock struct{}
+}
+
+// MockEventExecutorMockRecorder is the mock recorder for MockEventExecutor.
+type MockEventExecutorMockRecorder[E gobus.ObjectIn] struct {
+	mock *MockEventExecutor[E]
+}
+
+// NewMockEventExecutor creates a new mock instance.
+func NewMockEventExecutor[E gobus.ObjectIn](ctrl *gomock.Controller) *MockEventExecutor[E] {
+	mock := &MockEventExecutor[E]{ctrl: ctrl}
+	mock.recorder = &MockEventExecutorMockRecorder[E]{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockEventExecutor[E]) EXPECT() *MockEventExecutorMockRecorder[E] {
+	return m.recorder
+}
+
+// Execute mocks base method.
+func (m *MockEventExecutor[E]) Execute(ctx context.Context, event E) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Execute", ctx, event)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Execute indicates an expected call of Execute.
+func (mr *MockEventExecutorMockRecorder[E]) Execute(ctx, event any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Execute", reflect.TypeOf((*MockEventExecutor[E])(nil).Execute), ctx, event)
+}

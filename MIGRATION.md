@@ -1,5 +1,38 @@
 # Migrating to the instance-based Bus
 
+## Additions in v1.1.0
+
+Version 1.1.0 is backward compatible with v1.0.0. Existing command and query
+registrations do not require migration.
+
+The root package adds synchronous in-process events:
+
+```go
+bus.Subscribe(userCreatedHandler)
+err := bus.Publish(ctx, UserCreated{UserID: id})
+```
+
+An event may have zero or more subscribers. `Publish` calls a subscriber
+snapshot sequentially in subscription order and joins returned errors. The
+optional `github.com/assurrussa/gobus/async` package adds bounded asynchronous
+execution with explicit worker and shutdown limits. Existing `DispatchAsync`
+and `DispatchResultAsync` retain their v1.0.0 goroutine-per-call behavior.
+
+By default, a managed submission uses one context for queue admission and
+handler execution. `async.WithExecutionContext` lets background work retain a
+separate execution context after successful admission. The option is supported
+by command, result, and event submissions, including their `Try` variants. An
+execution deadline starts when its context is created, not when a worker starts
+the handler.
+
+Queue capacity counts waiting jobs, with up to the configured worker count
+executing in addition. Coordinate `Shutdown` outside handlers running on the
+same runtime; otherwise the caller can wait for its own worker until the
+shutdown context expires.
+
+The v1.1.0 additions remain in-memory and do not provide persistence, retries,
+or delivery after process termination.
+
 The Go 1.27 API removes the package-level registries and functions. There is no default bus or compatibility layer.
 
 ## Requirements

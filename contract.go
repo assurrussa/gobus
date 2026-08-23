@@ -15,3 +15,8 @@ type ResultCommandExecutor[Q ObjectIn, T ObjectOut] interface {
 type CommandExecutor[Q ObjectIn] interface {
 	Execute(ctx context.Context, dto Q) error
 }
+
+// EventExecutor handles an event of type E.
+type EventExecutor[E ObjectIn] interface {
+	Execute(ctx context.Context, event E) error
+}

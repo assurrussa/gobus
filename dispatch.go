@@ -22,6 +22,7 @@ type dataMapCommand[Q ObjectIn] map[reflect.Type]CommandExecutor[Q]
 type Bus struct {
 	dataCommand       unsafe.Pointer
 	dataResultCommand unsafe.Pointer
+	dataEvent         unsafe.Pointer
 	registerMu        sync.Mutex
 }
 
@@ -29,10 +30,12 @@ type Bus struct {
 func New() *Bus {
 	command := dataMapCommand[any]{}
 	resultCommand := dataMapResultCommand[any, any]{}
+	event := dataMapEvent[any]{}
 
 	return &Bus{
 		dataCommand:       unsafe.Pointer(&command),
 		dataResultCommand: unsafe.Pointer(&resultCommand),
+		dataEvent:         unsafe.Pointer(&event),
 	}
 }
 

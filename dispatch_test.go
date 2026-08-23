@@ -161,7 +161,7 @@ func TestBus_DispatchAllocationBudget(t *testing.T) {
 // goos: darwin
 // goarch: arm64
 // cpu: Apple M5 Pro
-// Benchmark_Register-12     19829042        69.92 ns/op       344 B/op       3 allocs/op.
+// Benchmark_Register-12     18833055        62.13 ns/op       344 B/op       3 allocs/op.
 func Benchmark_Register(b *testing.B) {
 	bus := gobus.New()
 
@@ -174,7 +174,7 @@ func Benchmark_Register(b *testing.B) {
 // goos: darwin
 // goarch: arm64
 // cpu: Apple M5 Pro
-// Benchmark_Dispatch-12     123828987        9.683 ns/op        0 B/op       0 allocs/op.
+// Benchmark_Dispatch-12     129305526        9.259 ns/op        0 B/op       0 allocs/op.
 func Benchmark_Dispatch(b *testing.B) {
 	ctx := context.Background()
 	bus := gobus.New()
