@@ -14,6 +14,8 @@ const (
 	maxResultDispatchAllocs = 1
 	testValueIn             = "test-in"
 	testValueHandle         = "test-handle"
+	testFirstHandlerValue   = "first"
+	testSecondHandlerValue  = "second"
 )
 
 func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
@@ -90,8 +92,8 @@ func TestBus_ResultHandlersAreIsolated(t *testing.T) {
 	ctx := context.Background()
 	firstBus := gobus.New()
 	secondBus := gobus.New()
-	firstBus.RegisterResult(&testHandle{val: "first"})
-	secondBus.RegisterResult(&testHandle{val: "second"})
+	firstBus.RegisterResult(&testHandle{val: testFirstHandlerValue})
+	secondBus.RegisterResult(&testHandle{val: testSecondHandlerValue})
 
 	first, err := firstBus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
 	checkNoError(t, err)
@@ -105,8 +107,8 @@ func TestBus_ResultHandlersAreIsolated(t *testing.T) {
 func TestBus_ResultHandlerRegistrationReplacesSameTypePair(t *testing.T) {
 	ctx := context.Background()
 	bus := gobus.New()
-	bus.RegisterResult(&testHandle{val: "first"})
-	bus.RegisterResult(&testHandle{val: "second"})
+	bus.RegisterResult(&testHandle{val: testFirstHandlerValue})
+	bus.RegisterResult(&testHandle{val: testSecondHandlerValue})
 
 	out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
 	checkNoError(t, err)
@@ -197,7 +199,7 @@ func TestBus_DispatchResultAllocationBudget(t *testing.T) {
 // goos: darwin
 // goarch: arm64
 // cpu: Apple M5 Pro
-// Benchmark_RegisterResult-12     15822766        70.81 ns/op       360 B/op       4 allocs/op.
+// Benchmark_RegisterResult-12     16375870        75.08 ns/op       360 B/op       4 allocs/op.
 func Benchmark_RegisterResult(b *testing.B) {
 	bus := gobus.New()
 
@@ -210,7 +212,7 @@ func Benchmark_RegisterResult(b *testing.B) {
 // goos: darwin
 // goarch: arm64
 // cpu: Apple M5 Pro
-// Benchmark_DispatchResult-12     57087354        22.26 ns/op        24 B/op       1 allocs/op.
+// Benchmark_DispatchResult-12     53863790        22.34 ns/op        24 B/op       1 allocs/op.
 func Benchmark_DispatchResult(b *testing.B) {
 	ctx := context.Background()
 	bus := gobus.New()

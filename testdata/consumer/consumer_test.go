@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/assurrussa/gobus"
+	busasync "github.com/assurrussa/gobus/async"
 )
 
 func TestPublicAPI(t *testing.T) {
@@ -13,6 +14,7 @@ func TestPublicAPI(t *testing.T) {
 	bus := gobus.New()
 	bus.Register(commandHandler{})
 	bus.RegisterResult(queryHandler{})
+	bus.Subscribe(eventHandler{})
 
 	if err := bus.Dispatch(ctx, command{id: 7}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -26,12 +28,80 @@ func TestPublicAPI(t *testing.T) {
 		t.Fatalf("DispatchResult id = %d, want 7", result.id)
 	}
 
-	async := bus.DispatchAsync(ctx, command{id: 8})
-	if err, ok := <-async; !ok || err != nil {
+	asyncResult := bus.DispatchAsync(ctx, command{id: 8})
+	if err, ok := <-asyncResult; !ok || err != nil {
 		t.Fatalf("DispatchAsync result = (%v, %t), want (nil, true)", err, ok)
 	}
-	if _, ok := <-async; ok {
+	if _, ok := <-asyncResult; ok {
 		t.Fatal("DispatchAsync yielded more than one result")
+	}
+
+	if err := bus.Publish(ctx, event{id: 9}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	runtime, err := busasync.New(bus, busasync.QueueConfig{Capacity: 4, Workers: 1})
+	if err != nil {
+		t.Fatalf("async.New: %v", err)
+	}
+	if err := runtime.RouteEvent[event](busasync.DefaultQueueName); err != nil {
+		t.Fatalf("RouteEvent: %v", err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Runtime.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := runtime.Shutdown(context.Background()); err != nil {
+			t.Errorf("Runtime.Shutdown: %v", err)
+		}
+	})
+	executionOption := busasync.WithExecutionContext(
+		context.WithValue(context.Background(), consumerExecutionContextKey{}, "managed"),
+	)
+
+	managedCommand, err := runtime.Submit(ctx, command{id: 10}, executionOption)
+	if err != nil {
+		t.Fatalf("Runtime.Submit: %v", err)
+	}
+	if err := <-managedCommand; err != nil {
+		t.Fatalf("managed command result: %v", err)
+	}
+	tryManagedCommand, err := runtime.TrySubmit(ctx, command{id: 11}, executionOption)
+	if err != nil {
+		t.Fatalf("Runtime.TrySubmit: %v", err)
+	}
+	if err := <-tryManagedCommand; err != nil {
+		t.Fatalf("try managed command result: %v", err)
+	}
+
+	managedQuery, err := runtime.SubmitResult[output](ctx, query{id: 12}, executionOption)
+	if err != nil {
+		t.Fatalf("Runtime.SubmitResult: %v", err)
+	}
+	if envelope := <-managedQuery; envelope.Error != nil || envelope.Result.id != 12 {
+		t.Fatalf("managed query result = %+v, want id 12", envelope)
+	}
+	tryManagedQuery, err := runtime.TrySubmitResult[output](ctx, query{id: 13}, executionOption)
+	if err != nil {
+		t.Fatalf("Runtime.TrySubmitResult: %v", err)
+	}
+	if envelope := <-tryManagedQuery; envelope.Error != nil || envelope.Result.id != 13 {
+		t.Fatalf("try managed query result = %+v, want id 13", envelope)
+	}
+
+	managedEvent, err := runtime.SubmitEvent(ctx, event{id: 14}, executionOption)
+	if err != nil {
+		t.Fatalf("Runtime.SubmitEvent: %v", err)
+	}
+	if err := <-managedEvent; err != nil {
+		t.Fatalf("managed event result: %v", err)
+	}
+	tryManagedEvent, err := runtime.TrySubmitEvent(ctx, event{id: 15}, executionOption)
+	if err != nil {
+		t.Fatalf("Runtime.TrySubmitEvent: %v", err)
+	}
+	if err := <-tryManagedEvent; err != nil {
+		t.Fatalf("try managed event result: %v", err)
 	}
 
 	if err := bus.Dispatch(ctx, missing{}); !errors.Is(err, gobus.ErrHandlerNotFound) {
@@ -67,3 +137,15 @@ func (queryHandler) Execute(_ context.Context, dto query) (output, error) {
 }
 
 type missing struct{}
+
+type event struct {
+	id int
+}
+
+type eventHandler struct{}
+
+func (eventHandler) Execute(_ context.Context, _ event) error {
+	return nil
+}
+
+type consumerExecutionContextKey struct{}

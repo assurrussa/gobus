@@ -1,8 +1,11 @@
 .DEFAULT_GOAL := check
 UNIT_COVERAGE_MIN := 90
-.PHONY: check fmt lint vet test test-race test-checkptr test-consumer test-consumer-release cover-html cover bench-all
+.PHONY: check build fmt lint vet test test-race test-checkptr test-consumer test-consumer-release cover-html cover bench-all
 
-check: fmt vet lint test test-race test-checkptr test-consumer cover-html cover
+check: fmt build vet lint test test-race test-checkptr test-consumer cover-html cover
+
+build:
+	go build ./...
 
 fmt:
 	go fmt ./...
@@ -34,11 +37,12 @@ cover-html:
 	@go tool cover -html=./coverage.text -o ./cover.html && rm ./coverage.text
 
 cover:
-	@go test -coverpkg=./... -coverprofile=./cover_profile.out.tmp $(go list ./...)
+	@go test -coverpkg=./... -coverprofile=./cover_profile.out.tmp . ./async
 	@grep -v -e "mock" -e "\.pb\.go" -e "\.pb\.validate\.go" ./cover_profile.out.tmp > ./cover_profile.out && rm ./cover_profile.out.tmp
-	@CUR_COVERAGE=$(shell go tool cover -func=cover_profile.out | tail -n 1 | awk '{ print $$3 }' | sed -e 's/^\([0-9]*\).*$$/\1/g' && rm ./cover_profile.out) && \
+	@CUR_COVERAGE=$$(go tool cover -func=cover_profile.out | tail -n 1 | awk '{ print $$3 }' | sed -e 's/^\([0-9]*\).*$$/\1/g') && \
+		rm ./cover_profile.out && \
     	echo "Current coverage: $$CUR_COVERAGE%" && \
-    	if [[ $$CUR_COVERAGE -lt $(UNIT_COVERAGE_MIN) ]]; then \
+		if [ "$$CUR_COVERAGE" -lt $(UNIT_COVERAGE_MIN) ]; then \
     		echo "Coverage is not enough: $$CUR_COVERAGE% < $(UNIT_COVERAGE_MIN)%"; \
     		exit 1; \
     	else \
