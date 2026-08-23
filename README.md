@@ -264,6 +264,13 @@ starts the handler. Create timeouts inside the handler when they must measure
 handler runtime rather than time spent waiting in the queue. The caller owns the
 completion channel and should observe it when execution errors matter.
 
+Managed workers recover panics from command and query handlers or event
+subscribers. The accepted job completes with an `*async.PanicError` containing
+the recovered value and stack trace, and the worker remains available for later
+jobs. If the recovered value is an error, `errors.Is` and `errors.As` remain
+usable. A panic during an event publication still stops its remaining
+subscribers. Synchronous `Bus` methods do not recover panics.
+
 `Shutdown` immediately rejects new work, drains accepted jobs, and waits for
 workers. If the first shutdown context expires, queued jobs that have not
 started receive `async.ErrRuntimeShutdown`, running contexts are cancelled with
