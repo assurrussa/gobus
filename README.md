@@ -125,7 +125,9 @@ err := bus.Dispatch(ctx, command)
 result, err := bus.DispatchResult[Result](ctx, query)
 ```
 
-Pointer and value command types are distinct and both are supported.
+Pointer and value command types are distinct and both are supported. GoBus routes
+by the compile-time generic type of the submitted value; it does not inspect or
+polymorphically match dynamic concrete types stored inside an interface.
 
 ## Events
 
@@ -169,7 +171,13 @@ Each channel receives exactly one value and is then closed. A successful
 `DispatchAsync` sends `nil`. The provided context is passed to the handler unchanged;
 cancellation behavior is therefore controlled by the handler.
 
-These methods intentionally retain their v1.0.0 behavior. Use the optional
+If an unmanaged asynchronous handler panics, both `DispatchAsync` and
+`DispatchResultAsync` recover the panic and report a `*gobus.PanicError` through
+the returned channel or envelope error, preventing uncatchable process crashes.
+For queries, `DispatchResultAsync` always preserves both the `Result` and `Error`
+returned by the handler.
+
+These methods start an unmanaged goroutine per call. Use the optional
 managed runtime when producers need bounded queueing and concurrency.
 
 ## Managed asynchronous execution
@@ -324,11 +332,11 @@ bus.Register(decorated)
 ```
 
 Extensions should depend only on the exported handler contracts; the immutable
-registry snapshots and unsafe dispatch machinery are internal implementation details.
+registry snapshots and atomic copy-on-write implementation are internal implementation details.
 
 ## API behavior
 
-- Create a bus with `gobus.New()`. The zero value is not supported.
+- The zero value of `Bus` is ready to use. `gobus.New()` returns a convenient initialized `*Bus`.
 - Pass the bus as `*gobus.Bus` and do not copy it after first use.
 - Registration and dispatch are safe to run concurrently.
 - A dispatch observes either the complete old registry snapshot or the complete new one.
@@ -347,12 +355,12 @@ of five runs:
 
 | Operation | Time | Memory | Allocations |
 | --- | ---: | ---: | ---: |
-| Register | 62.13 ns/op | 344 B/op | 3 allocs/op |
-| Dispatch | 9.259 ns/op | 0 B/op | 0 allocs/op |
-| RegisterResult | 75.08 ns/op | 360 B/op | 4 allocs/op |
-| DispatchResult | 22.34 ns/op | 24 B/op | 1 alloc/op |
-| Publish (one subscriber) | 9.861 ns/op | 0 B/op | 0 allocs/op |
-| Managed Runtime Submit | 550.9 ns/op | 440 B/op | 9 allocs/op |
+| Register (handler replacement) | 62.23 ns/op | 344 B/op | 3 allocs/op |
+| Dispatch | 10.33 ns/op | 0 B/op | 0 allocs/op |
+| RegisterResult (handler replacement) | 67.56 ns/op | 360 B/op | 4 allocs/op |
+| DispatchResult | 22.59 ns/op | 24 B/op | 1 alloc/op |
+| Publish (one subscriber) | 9.048 ns/op | 0 B/op | 0 allocs/op |
+| Managed Runtime Submit | 555.4 ns/op | 440 B/op | 9 allocs/op |
 
 Run the same 12-CPU benchmark suite locally with:
 

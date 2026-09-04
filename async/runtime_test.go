@@ -560,6 +560,151 @@ func TestRuntimeRejectsInvalidSubmitOptions(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecutionContextOptionOrder(t *testing.T) {
+	type orderContextKey struct{}
+	bus := gobus.New()
+	observed := make(chan string, 1)
+	bus.Register(commandHandler[testCommand]{execute: func(ctx context.Context, _ testCommand) error {
+		val, _ := ctx.Value(orderContextKey{}).(string)
+		observed <- val
+		return nil
+	}})
+	runtime := newRuntime(t, bus, validQueueConfig())
+	startRuntime(t, runtime)
+
+	t.Run("last valid option wins", func(t *testing.T) {
+		ctx1 := context.WithValue(context.Background(), orderContextKey{}, "first")
+		ctx2 := context.WithValue(context.Background(), orderContextKey{}, "second")
+		result, err := runtime.Submit(
+			context.Background(),
+			testCommand{},
+			busasync.WithExecutionContext(ctx1),
+			busasync.WithExecutionContext(ctx2),
+		)
+		if err != nil {
+			t.Fatalf("Submit() error = %v", err)
+		}
+		if err := receiveError(t, result); err != nil {
+			t.Fatalf("execution error = %v", err)
+		}
+		select {
+		case val := <-observed:
+			if val != "second" {
+				t.Fatalf("observed context value = %q, want %q", val, "second")
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("timed out waiting for execution")
+		}
+	})
+
+	t.Run("early nil overridden by last valid option", func(t *testing.T) {
+		ctx2 := context.WithValue(context.Background(), orderContextKey{}, "valid")
+		nilOption := busasync.WithExecutionContext(nil) //nolint:staticcheck // Verify option ordering.
+		result, err := runtime.Submit(
+			context.Background(),
+			testCommand{},
+			nilOption,
+			busasync.WithExecutionContext(ctx2),
+		)
+		if err != nil {
+			t.Fatalf("Submit() error = %v", err)
+		}
+		if err := receiveError(t, result); err != nil {
+			t.Fatalf("execution error = %v", err)
+		}
+		select {
+		case val := <-observed:
+			if val != "valid" {
+				t.Fatalf("observed context value = %q, want %q", val, "valid")
+			}
+		case <-time.After(testTimeout):
+			t.Fatal("timed out waiting for execution")
+		}
+	})
+
+	t.Run("early valid option overridden by nil option", func(t *testing.T) {
+		ctx1 := context.WithValue(context.Background(), orderContextKey{}, "first")
+		nilOption := busasync.WithExecutionContext(nil) //nolint:staticcheck // Verify option ordering.
+		result, err := runtime.Submit(
+			context.Background(),
+			testCommand{},
+			busasync.WithExecutionContext(ctx1),
+			nilOption,
+		)
+		if result != nil || !errors.Is(err, busasync.ErrInvalidSubmitOption) {
+			t.Fatalf("Submit() = (%v, %v), want (nil, ErrInvalidSubmitOption)", result, err)
+		}
+	})
+}
+
+func TestRuntimeRejectsNilAdmissionContext(t *testing.T) {
+	runtime := newRuntime(t, gobus.New(), validQueueConfig())
+	startRuntime(t, runtime)
+
+	var nilCtx context.Context
+
+	if _, err := runtime.Submit(nilCtx, testCommand{}); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("Submit(nil) error = %v, want ErrNilContext", err)
+	}
+	if _, err := runtime.TrySubmit(nilCtx, testCommand{}); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("TrySubmit(nil) error = %v, want ErrNilContext", err)
+	}
+	if _, err := runtime.SubmitResult[testOutput](nilCtx, testQuery{}); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("SubmitResult(nil) error = %v, want ErrNilContext", err)
+	}
+	if _, err := runtime.TrySubmitResult[testOutput](nilCtx, testQuery{}); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("TrySubmitResult(nil) error = %v, want ErrNilContext", err)
+	}
+	if _, err := runtime.SubmitEvent(nilCtx, testEvent{}); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("SubmitEvent(nil) error = %v, want ErrNilContext", err)
+	}
+	if _, err := runtime.TrySubmitEvent(nilCtx, testEvent{}); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("TrySubmitEvent(nil) error = %v, want ErrNilContext", err)
+	}
+	if err := runtime.Shutdown(nilCtx); !errors.Is(err, busasync.ErrNilContext) {
+		t.Fatalf("Shutdown(nil) error = %v, want ErrNilContext", err)
+	}
+}
+
+func TestRuntime_SubmitResultPreservesPartialResult(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	partialErr := errors.New("partial error")
+	bus.RegisterResult(resultHandler[testQuery, testOutput]{
+		execute: func(_ context.Context, query testQuery) (testOutput, error) {
+			return testOutput(query), partialErr
+		},
+	})
+	runtime := newRuntime(t, bus, validQueueConfig())
+	startRuntime(t, runtime)
+
+	// SubmitResult
+	queryResult, err := runtime.SubmitResult[testOutput](ctx, testQuery{id: 42})
+	if err != nil {
+		t.Fatalf("SubmitResult() error = %v", err)
+	}
+	envelope := receiveEnvelope(t, queryResult)
+	if envelope.Result.id != 42 {
+		t.Fatalf("SubmitResult result id = %d, want 42", envelope.Result.id)
+	}
+	if !errors.Is(envelope.Error, partialErr) {
+		t.Fatalf("SubmitResult error = %v, want %v", envelope.Error, partialErr)
+	}
+
+	// TrySubmitResult
+	tryQueryResult, err := runtime.TrySubmitResult[testOutput](ctx, testQuery{id: 43})
+	if err != nil {
+		t.Fatalf("TrySubmitResult() error = %v", err)
+	}
+	tryEnvelope := receiveEnvelope(t, tryQueryResult)
+	if tryEnvelope.Result.id != 43 {
+		t.Fatalf("TrySubmitResult result id = %d, want 43", tryEnvelope.Result.id)
+	}
+	if !errors.Is(tryEnvelope.Error, partialErr) {
+		t.Fatalf("TrySubmitResult error = %v, want %v", tryEnvelope.Error, partialErr)
+	}
+}
+
 func TestRuntimeRecoversPanicAndKeepsWorkerAlive(t *testing.T) {
 	panicValue := errors.New("panic value")
 	bus := gobus.New()
@@ -971,11 +1116,6 @@ func TestRuntimeResultChannelsDoNotBlockShutdownWhenUnread(t *testing.T) {
 	}
 }
 
-// Go 1.27.0, median of 5 runs.
-// goos: darwin
-// goarch: arm64
-// cpu: Apple M5 Pro
-// BenchmarkRuntimeSubmit-12     2211358        550.9 ns/op       440 B/op       9 allocs/op.
 func BenchmarkRuntimeSubmit(b *testing.B) {
 	bus := gobus.New()
 	bus.Register(commandHandler[testCommand]{execute: func(_ context.Context, _ testCommand) error { return nil }})

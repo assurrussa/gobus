@@ -2,6 +2,7 @@ package example
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/assurrussa/gobus"
@@ -19,7 +20,10 @@ func NewService(bus *gobus.Bus) *Service {
 }
 
 func (s *Service) Handle(ctx context.Context, dto RequestIn) (ResponseOut, error) {
-	n, _ := strconv.Atoi(dto.Value)
+	n, err := strconv.Atoi(dto.Value)
+	if err != nil {
+		return ResponseOut{}, fmt.Errorf("parse value: %w", err)
+	}
 
 	out, err := s.bus.DispatchResult[examplein.LiveOut](ctx, examplein.LiveIn{Val: n})
 	if err != nil {
@@ -38,7 +42,10 @@ func (s *Service) Handle(ctx context.Context, dto RequestIn) (ResponseOut, error
 	}
 	outLiveAsyncRes := strconv.Itoa(outLiveAsync.Result.Val)
 
-	s.bus.DispatchAsync(ctx, liveasync.InAsync{Val: out.Val})
+	asyncCh := s.bus.DispatchAsync(ctx, liveasync.InAsync{Val: out.Val})
+	if err := <-asyncCh; err != nil {
+		return ResponseOut{}, err
+	}
 
 	return ResponseOut{
 		Value: strconv.Itoa(out.Val) + "_test_" + outLucky.Val + "_" + outLiveAsyncRes,

@@ -35,6 +35,10 @@ func (r *Runtime) submitCommand[Q gobus.ObjectIn](
 	try bool,
 	options []SubmitOption,
 ) (<-chan error, error) {
+	if admissionContext == nil {
+		return nil, ErrNilContext
+	}
+
 	executionContext, err := executionContextFor(admissionContext, options)
 	if err != nil {
 		return nil, err
@@ -88,6 +92,10 @@ func (r *Runtime) submitResult[T gobus.ObjectOut, Q gobus.ObjectIn](
 	try bool,
 	options []SubmitOption,
 ) (<-chan gobus.Envelope[T], error) {
+	if admissionContext == nil {
+		return nil, ErrNilContext
+	}
+
 	executionContext, err := executionContextFor(admissionContext, options)
 	if err != nil {
 		return nil, err
@@ -98,12 +106,10 @@ func (r *Runtime) submitResult[T gobus.ObjectOut, Q gobus.ObjectIn](
 		executionContext: executionContext,
 		run: func(executionContext context.Context) {
 			out, err := r.bus.DispatchResult[T](executionContext, query)
-			if err != nil {
-				result <- gobus.Envelope[T]{Error: err}
-				close(result)
-				return
+			result <- gobus.Envelope[T]{
+				Result: out,
+				Error:  err,
 			}
-			result <- gobus.Envelope[T]{Result: out}
 			close(result)
 		},
 		resolve: func(err error) {
@@ -151,6 +157,10 @@ func (r *Runtime) submitEvent[E gobus.ObjectIn](
 	try bool,
 	options []SubmitOption,
 ) (<-chan error, error) {
+	if admissionContext == nil {
+		return nil, ErrNilContext
+	}
+
 	executionContext, err := executionContextFor(admissionContext, options)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 name: Go
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "master", "release/*" ]
     tags: [ "v*" ]
@@ -16,14 +17,26 @@ env:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            go: 1.27.0
+          - os: ubuntu-latest
+            go: 1.27.1
+          - os: macos-latest
+            go: 1.27.1
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v6
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go }}
 
       - name: Install development tools
         run: |
@@ -37,3 +50,17 @@ jobs:
         run: |
           go generate ./...
           git diff --exit-code
+
+  release-consumer:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test published release consumer
+        run: make test-consumer-release VERSION="${GITHUB_REF_NAME}"
+

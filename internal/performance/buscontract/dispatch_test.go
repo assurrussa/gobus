@@ -3,6 +3,7 @@ package bus_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -29,6 +30,8 @@ func TestBus_Handle(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
+	errs := make(chan error, 300)
+
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
@@ -43,8 +46,11 @@ func TestBus_Handle(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: testValueIn, index: i})
-			checkNoError(t, err)
-			checkEqual(t, "test_handle", out.value)
+			if err != nil {
+				errs <- err
+			} else if out.value != "test_handle" {
+				errs <- fmt.Errorf("expected test_handle, got %s", out.value)
+			}
 		}()
 	}
 
@@ -54,8 +60,11 @@ func TestBus_Handle(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			out := <-bus.DispatchAsync[testIn, testOut](ctx, testIn{value: testValueIn, index: i})
-			checkNoError(t, out.Error)
-			checkEqual(t, "test_handle", out.Result.value)
+			if out.Error != nil {
+				errs <- out.Error
+			} else if out.Result.value != "test_handle" {
+				errs <- fmt.Errorf("expected test_handle, got %s", out.Result.value)
+			}
 		}()
 	}
 
@@ -66,12 +75,20 @@ func TestBus_Handle(t *testing.T) {
 			defer wg.Done()
 			errExpect := errors.New("test error")
 			out, err := bus.Dispatch[testIn, testOut](ctx, testIn{value: testValueIn, index: i, err: errExpect})
-			checkError(t, err, errExpect)
-			checkEqual(t, "", out.value)
+			if !errors.Is(err, errExpect) {
+				errs <- fmt.Errorf("expected error %s, got %w", errExpect.Error(), err)
+			} else if out.value != "" {
+				errs <- fmt.Errorf("expected empty value, got %s", out.value)
+			}
 		}()
 	}
 
 	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent dispatch error: %v", err)
+	}
 }
 
 // Go 1.27.0, median of 5 runs.
@@ -146,17 +163,6 @@ func (testInPointer) Key() string {
 
 type testOut struct {
 	value string
-}
-
-func checkError(t *testing.T, err error, targetErr error) {
-	t.Helper()
-
-	if err == nil {
-		t.Fatalf("check error: %v", err)
-	}
-	if targetErr != nil && !errors.Is(err, targetErr) {
-		t.Fatalf("check error: expected %q, got %q", targetErr, err)
-	}
 }
 
 func checkNoError(t *testing.T, err error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -190,11 +191,6 @@ func TestBus_PublishAllocationBudget(t *testing.T) {
 	}
 }
 
-// Go 1.27.0, median of 5 runs.
-// goos: darwin
-// goarch: arm64
-// cpu: Apple M5 Pro
-// BenchmarkPublish-12     121105342        9.861 ns/op         0 B/op       0 allocs/op.
 func BenchmarkPublish(b *testing.B) {
 	ctx := context.Background()
 	bus := gobus.New()
@@ -286,4 +282,60 @@ type printEventHandler struct{}
 func (printEventHandler) Execute(_ context.Context, event printableEvent) error {
 	_, _ = fmt.Fprintln(os.Stdout, event.value)
 	return nil
+}
+
+func TestBus_ZeroValueIsUsable_Event(t *testing.T) {
+	ctx := context.Background()
+	var bus gobus.Bus
+
+	// Publishing to zero-value bus with no subscribers succeeds.
+	if err := bus.Publish(ctx, testEvent{value: "initial"}); err != nil {
+		t.Fatalf("Publish error = %v, want nil", err)
+	}
+
+	// Subscribing on zero-value bus works.
+	handler := &countingEventHandler{}
+	bus.Subscribe(handler)
+
+	if err := bus.Publish(ctx, testEvent{value: "delivered"}); err != nil {
+		t.Fatalf("Publish error = %v, want nil", err)
+	}
+	if got := handler.calls.Load(); got != 1 {
+		t.Fatalf("calls = %d, want 1", got)
+	}
+}
+
+func TestBus_PublishInvalidRegistryEntry(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	key := reflect.TypeFor[testEvent]()
+	bus.InjectInvalidEventSubscribers(key, "not-a-subscriber-slice")
+
+	err := bus.Publish(ctx, testEvent{})
+	if !errors.Is(err, gobus.ErrInvalidRegistryEntryForTest) {
+		t.Fatalf("Publish error = %v, want ErrInvalidRegistryEntryForTest", err)
+	}
+}
+
+func TestBus_SubscribeNilHandlerPanics(t *testing.T) {
+	var bus gobus.Bus
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on nil handler, got nil")
+		}
+	}()
+	bus.Subscribe[testEvent](nil)
+}
+
+func TestBus_SubscribeTypedNilHandlerPanics(t *testing.T) {
+	var bus gobus.Bus
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on typed nil handler, got nil")
+		}
+	}()
+	var handler *testEventHandler
+	bus.Subscribe[testEvent](handler)
 }
