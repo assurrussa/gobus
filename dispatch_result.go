@@ -80,25 +80,33 @@ func (b *Bus) DispatchResult[T ObjectOut, Q ObjectIn](ctx context.Context, dto Q
 
 // DispatchResultAsync executes the result handler asynchronously in an unmanaged
 // goroutine. The returned channel yields exactly one envelope containing the result
-// and any error returned by the handler (or a *PanicError in Error if the handler panics),
-// and then closes. For managed execution with queues, concurrency limits, and backpressure,
-// use async.Runtime.
+// and any error returned by the handler (or a *PanicError in Error if the handler panics,
+// or ErrHandlerGoexit if the handler exits via runtime.Goexit), and then closes. For managed
+// execution with queues, concurrency limits, and backpressure, use async.Runtime.
 func (b *Bus) DispatchResultAsync[T ObjectOut, Q ObjectIn](ctx context.Context, dto Q) <-chan Envelope[T] {
 	ch := make(chan Envelope[T], 1)
 	go func() {
+		var normalReturn bool
 		defer close(ch)
 		defer func() {
-			if r := recover(); r != nil {
-				ch <- Envelope[T]{
-					Error: &PanicError{
-						Value: r,
-						Stack: string(debug.Stack()),
-					},
+			if !normalReturn {
+				if r := recover(); r != nil {
+					ch <- Envelope[T]{
+						Error: &PanicError{
+							Value: r,
+							Stack: string(debug.Stack()),
+						},
+					}
+				} else {
+					ch <- Envelope[T]{
+						Error: ErrHandlerGoexit,
+					}
 				}
 			}
 		}()
 
 		out, err := b.DispatchResult[T](ctx, dto)
+		normalReturn = true
 		ch <- Envelope[T]{
 			Result: out,
 			Error:  err,

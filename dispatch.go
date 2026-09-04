@@ -73,23 +73,31 @@ func (b *Bus) Dispatch[Q ObjectIn](ctx context.Context, dto Q) error {
 
 // DispatchAsync executes the handler registered for dto's type asynchronously in
 // an unmanaged goroutine. The returned channel yields exactly one error, nil on
-// success, or *PanicError if the handler panics, and then closes. For managed
-// execution with queues, concurrency limits, and backpressure, use async.Runtime.
+// success, *PanicError if the handler panics, or ErrHandlerGoexit if the handler
+// exits via runtime.Goexit, and then closes. For managed execution with queues,
+// concurrency limits, and backpressure, use async.Runtime.
 func (b *Bus) DispatchAsync[Q ObjectIn](ctx context.Context, dto Q) <-chan error {
 	ch := make(chan error, 1)
 
 	go func() {
+		var normalReturn bool
 		defer close(ch)
 		defer func() {
-			if r := recover(); r != nil {
-				ch <- &PanicError{
-					Value: r,
-					Stack: string(debug.Stack()),
+			if !normalReturn {
+				if r := recover(); r != nil {
+					ch <- &PanicError{
+						Value: r,
+						Stack: string(debug.Stack()),
+					}
+				} else {
+					ch <- ErrHandlerGoexit
 				}
 			}
 		}()
 
-		ch <- b.Dispatch(ctx, dto)
+		err := b.Dispatch(ctx, dto)
+		normalReturn = true
+		ch <- err
 	}()
 
 	return ch

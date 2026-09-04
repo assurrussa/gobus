@@ -1140,6 +1140,184 @@ func BenchmarkRuntimeSubmit(b *testing.B) {
 	}
 }
 
+func TestRuntimeForcedShutdownDuringAdmission(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	workerStarted := make(chan struct{}, 1)
+	workerRelease := make(chan struct{})
+
+	bus.Register(commandHandler[testCommand]{
+		execute: func(_ context.Context, cmd testCommand) error {
+			if cmd.id == 1 {
+				workerStarted <- struct{}{}
+				<-workerRelease
+			}
+			return nil
+		},
+	})
+
+	rt := newRuntime(t, bus, busasync.QueueConfig{Capacity: 1, Workers: 1})
+	startRuntime(t, rt)
+
+	firstResult, err := rt.Submit(ctx, testCommand{id: 1})
+	if err != nil {
+		t.Fatalf("first Submit() error = %v", err)
+	}
+	receiveSignal(t, workerStarted, "worker 1 occupied")
+
+	admissionEntered := make(chan struct{})
+	resumeAdmission := make(chan struct{})
+	rt.SetAfterBeginAdmissionForTest(func() {
+		close(admissionEntered)
+		<-resumeAdmission
+	})
+
+	type submitOutcome struct {
+		ch  <-chan error
+		err error
+	}
+	outcomeChan := make(chan submitOutcome, 1)
+
+	go func() {
+		ch, submitErr := rt.TrySubmit(ctx, testCommand{id: 2})
+		outcomeChan <- submitOutcome{ch: ch, err: submitErr}
+	}()
+
+	receiveSignal(t, admissionEntered, "admission entered")
+
+	shutdownCtx, cancelShutdown := context.WithCancel(ctx)
+	cancelShutdown()
+	shutdownErr := rt.Shutdown(shutdownCtx)
+	if !errors.Is(shutdownErr, context.Canceled) {
+		t.Fatalf("Shutdown error = %v, want context.Canceled", shutdownErr)
+	}
+
+	close(resumeAdmission)
+
+	var outcome submitOutcome
+	select {
+	case outcome = <-outcomeChan:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for TrySubmit to return")
+	}
+
+	if outcome.ch != nil || !errors.Is(outcome.err, busasync.ErrRuntimeClosed) {
+		t.Fatalf("TrySubmit = (%v, %v), want (nil, ErrRuntimeClosed)", outcome.ch, outcome.err)
+	}
+
+	stats := rt.Stats()
+	if stats.Queues[busasync.DefaultQueueName].Depth != 0 {
+		t.Fatalf("queue depth = %d, want 0", stats.Queues[busasync.DefaultQueueName].Depth)
+	}
+
+	close(workerRelease)
+	if err := receiveError(t, firstResult); err != nil {
+		t.Fatalf("first job error = %v", err)
+	}
+	if err := rt.Shutdown(context.Background()); err != nil {
+		t.Fatalf("final Shutdown error = %v", err)
+	}
+}
+
+func TestRuntimeWorkerGoexitRecovery(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+
+	bus.Register(commandHandler[testCommand]{
+		execute: func(_ context.Context, cmd testCommand) error {
+			if cmd.id == 1 {
+				runtime.Goexit()
+			}
+			return nil
+		},
+	})
+
+	rt := newRuntime(t, bus, busasync.QueueConfig{Capacity: 2, Workers: 1})
+	startRuntime(t, rt)
+
+	first, err := rt.Submit(ctx, testCommand{id: 1})
+	if err != nil {
+		t.Fatalf("first Submit() error = %v", err)
+	}
+	second, err := rt.Submit(ctx, testCommand{id: 2})
+	if err != nil {
+		t.Fatalf("second Submit() error = %v", err)
+	}
+
+	firstErr := receiveError(t, first)
+	if !errors.Is(firstErr, busasync.ErrHandlerGoexit) {
+		t.Fatalf("first job error = %v, want ErrHandlerGoexit", firstErr)
+	}
+
+	secondErr := receiveError(t, second)
+	if secondErr != nil {
+		t.Fatalf("second job error = %v, want nil", secondErr)
+	}
+
+	if err := rt.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown error = %v", err)
+	}
+
+	stats := rt.Stats()
+	qStats := stats.Queues[busasync.DefaultQueueName]
+	if qStats.Depth != 0 {
+		t.Fatalf("queue depth = %d, want 0", qStats.Depth)
+	}
+	if qStats.Completed != 2 {
+		t.Fatalf("completed = %d, want 2", qStats.Completed)
+	}
+}
+
+func TestRuntimeWorkerGoexitResultRecovery(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+
+	bus.RegisterResult(resultHandler[testQuery, testOutput]{
+		execute: func(_ context.Context, q testQuery) (testOutput, error) {
+			if q.id == 1 {
+				runtime.Goexit()
+			}
+			return testOutput(q), nil
+		},
+	})
+
+	rt := newRuntime(t, bus, busasync.QueueConfig{Capacity: 2, Workers: 1})
+	startRuntime(t, rt)
+
+	first, err := rt.SubmitResult[testOutput](ctx, testQuery{id: 1})
+	if err != nil {
+		t.Fatalf("first SubmitResult error = %v", err)
+	}
+	second, err := rt.SubmitResult[testOutput](ctx, testQuery{id: 2})
+	if err != nil {
+		t.Fatalf("second SubmitResult error = %v", err)
+	}
+
+	var firstEnvelope gobus.Envelope[testOutput]
+	select {
+	case firstEnvelope = <-first:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for first result")
+	}
+	if !errors.Is(firstEnvelope.Error, busasync.ErrHandlerGoexit) {
+		t.Fatalf("first query error = %v, want ErrHandlerGoexit", firstEnvelope.Error)
+	}
+
+	var secondEnvelope gobus.Envelope[testOutput]
+	select {
+	case secondEnvelope = <-second:
+	case <-time.After(testTimeout):
+		t.Fatal("timed out waiting for second result")
+	}
+	if secondEnvelope.Error != nil || secondEnvelope.Result.id != 2 {
+		t.Fatalf("second query result = %+v, want id 2 and nil error", secondEnvelope)
+	}
+
+	if err := rt.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown error = %v", err)
+	}
+}
+
 func validQueueConfig() busasync.QueueConfig {
 	return busasync.QueueConfig{Capacity: 4, Workers: 1}
 }

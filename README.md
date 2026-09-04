@@ -28,11 +28,17 @@ distributed routing.
 GoBus requires Go 1.27 or later because its API uses generic methods.
 
 The instance-based API is available starting with `v1.0.0`; events and the
-managed async runtime are available starting with `v1.1.0`. `v0.9.1` contains
-the legacy package-level API.
+managed async runtime are available starting with `v1.1.0`; safe registry
+copy-on-write, partial result preservation, and asynchronous panic recovery are
+available starting with `v1.2.0`. `v0.9.1` contains the legacy package-level API.
+
+**Unreleased:** `ErrHandlerGoexit`, automatic worker replacement after
+`runtime.Goexit`, and forced shutdown coordination for late admissions and
+pending result delivery are available in the current source, but are not part
+of `v1.2.0`. See [MIGRATION.md](MIGRATION.md#unreleased).
 
 ```sh
-go get github.com/assurrussa/gobus@v1.1.0
+go get github.com/assurrussa/gobus@v1.2.0
 ```
 
 Then import the package:
@@ -174,8 +180,10 @@ cancellation behavior is therefore controlled by the handler.
 If an unmanaged asynchronous handler panics, both `DispatchAsync` and
 `DispatchResultAsync` recover the panic and report a `*gobus.PanicError` through
 the returned channel or envelope error, preventing uncatchable process crashes.
-For queries, `DispatchResultAsync` always preserves both the `Result` and `Error`
-returned by the handler.
+In the unreleased source, if a handler terminates via `runtime.Goexit`, they report
+`gobus.ErrHandlerGoexit`, guaranteeing exactly one delivered result.
+For queries, `DispatchResultAsync` always
+preserves both the `Result` and `Error` returned by the handler.
 
 These methods start an unmanaged goroutine per call. Use the optional
 managed runtime when producers need bounded queueing and concurrency.
@@ -273,11 +281,13 @@ handler runtime rather than time spent waiting in the queue. The caller owns the
 completion channel and should observe it when execution errors matter.
 
 Managed workers recover panics from command and query handlers or event
-subscribers. The accepted job completes with an `*async.PanicError` containing
-the recovered value and stack trace, and the worker remains available for later
-jobs. If the recovered value is an error, `errors.Is` and `errors.As` remain
-usable. A panic during an event publication still stops its remaining
-subscribers. Synchronous `Bus` methods do not recover panics.
+subscribers (completing the job with `*async.PanicError`). The unreleased source
+also detects `runtime.Goexit` (completing the job with `async.ErrHandlerGoexit` while
+automatically replacing the terminated worker to preserve queue capacity).
+In both cases, subsequent jobs continue to be processed. If the recovered
+panic value is an error, `errors.Is` and `errors.As` remain usable. A panic
+during an event publication still stops its remaining subscribers.
+Synchronous `Bus` methods do not recover panics.
 
 `Shutdown` immediately rejects new work, drains accepted jobs, and waits for
 workers. If the first shutdown context expires, queued jobs that have not
@@ -286,6 +296,11 @@ that cause, and `Shutdown` returns the context error. A handler that ignores
 context cannot be forcibly terminated. Coordinate shutdown outside the
 runtime's handlers: calling `Shutdown` from a job running on the same runtime
 waits for the calling worker and can block until the shutdown context expires.
+
+The unreleased source also resolves jobs admitted during forced shutdown before
+waiting for busy workers. A successful `Shutdown` waits for all accepted result
+deliveries, including those performed by concurrent pending-job cleanup, before
+the runtime reaches `StateClosed`.
 
 Each queue is FIFO, but completion order is guaranteed only with one worker.
 Nested work that must finish before its parent should use synchronous `Bus`

@@ -187,7 +187,7 @@ func (r *Runtime) submitEvent[E gobus.ObjectIn](
 }
 
 func (r *Runtime) enqueue(admissionContext context.Context, key routeKey, job queuedJob, try bool) error {
-	configuredQueue, err := r.beginAdmission(key)
+	configuredQueue, hook, err := r.beginAdmission(key)
 	if err != nil {
 		return err
 	}
@@ -198,8 +198,22 @@ func (r *Runtime) enqueue(admissionContext context.Context, key routeKey, job qu
 		return err
 	}
 
+	if hook != nil {
+		hook()
+	}
+
+	select {
+	case <-r.closing:
+		configuredQueue.rejected.Add(1)
+		return ErrRuntimeClosed
+	default:
+	}
+
 	if try {
 		select {
+		case <-r.closing:
+			configuredQueue.rejected.Add(1)
+			return ErrRuntimeClosed
 		case configuredQueue.jobs <- job:
 			configuredQueue.accepted.Add(1)
 			return nil
@@ -222,7 +236,7 @@ func (r *Runtime) enqueue(admissionContext context.Context, key routeKey, job qu
 	}
 }
 
-func (r *Runtime) beginAdmission(key routeKey) (*queue, error) {
+func (r *Runtime) beginAdmission(key routeKey) (*queue, func(), error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -235,15 +249,15 @@ func (r *Runtime) beginAdmission(key routeKey) (*queue, error) {
 	switch r.state {
 	case StateRunning:
 		r.admissions.Add(1)
-		return configuredQueue, nil
+		return configuredQueue, r.afterBeginAdmissionForTest, nil
 	case StateNew:
 		configuredQueue.rejected.Add(1)
-		return nil, ErrRuntimeNotStarted
+		return nil, nil, ErrRuntimeNotStarted
 	case StateClosing, StateClosed:
 		configuredQueue.rejected.Add(1)
-		return nil, ErrRuntimeClosed
+		return nil, nil, ErrRuntimeClosed
 	default:
 		configuredQueue.rejected.Add(1)
-		return nil, ErrRuntimeClosed
+		return nil, nil, ErrRuntimeClosed
 	}
 }
