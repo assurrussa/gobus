@@ -1,8 +1,10 @@
 # Migrating to the instance-based Bus
 
-## Unreleased
+## Additions and behavior changes in v1.2.1
 
-These changes are available in the current source and are not part of `v1.2.0`:
+Version 1.2.1 hardens asynchronous execution against abnormal handler termination and coordinates forced shutdown admissions.
+
+Key changes and additions:
 
 - **`runtime.Goexit` Abnormal Exit Handling**: `DispatchAsync`, `DispatchResultAsync`, and managed `async.Runtime` detect `runtime.Goexit()` calls and report `gobus.ErrHandlerGoexit` (also exposed as `async.ErrHandlerGoexit`), ensuring completion channels receive an explicit failure instead of a zero-value or hanging. Managed queues automatically replace terminated workers to keep pool capacity intact.
 - **Forced Shutdown Admission Coordination**: Late-finishing queue admissions during forced shutdown are rejected immediately or their pending jobs are drained and resolved with `async.ErrRuntimeShutdown` before waiting for busy workers, preventing orphaned jobs from remaining unresolved. Successful `Shutdown` calls and `StateClosed` also wait for concurrent pending-job cleanup to finish delivering all accepted results.
