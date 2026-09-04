@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 )
 
@@ -17,7 +18,8 @@ type Envelope struct {
 type dataMap map[string]any
 
 type CommandEvent struct {
-	handlers atomic.Pointer[dataMap]
+	handlers   atomic.Pointer[dataMap]
+	registerMu sync.Mutex
 }
 
 func NewCommandEvent() *CommandEvent {
@@ -27,6 +29,9 @@ func NewCommandEvent() *CommandEvent {
 }
 
 func (c *CommandEvent) Register(dto ObjectIn, handler Command) {
+	c.registerMu.Lock()
+	defer c.registerMu.Unlock()
+
 	data := c.loadReadOnly()
 	newData := make(dataMap)
 	for k, v := range data {
@@ -35,7 +40,7 @@ func (c *CommandEvent) Register(dto ObjectIn, handler Command) {
 
 	keyName := reflect.TypeOf(dto).String()
 	newData[keyName] = handler
-	c.handlers.Swap(&newData)
+	c.handlers.Store(&newData)
 }
 
 func (c *CommandEvent) Dispatch(ctx context.Context, dto ObjectIn, out any) error {

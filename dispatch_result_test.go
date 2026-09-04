@@ -3,6 +3,7 @@ package gobus_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -43,6 +44,8 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
+	errs := make(chan error, 3000)
+
 	for i := 0; i < 1000; i++ {
 		wg.Add(1)
 		go func() {
@@ -57,8 +60,11 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: i})
-			checkNoError(t, err)
-			checkEqual(t, "test-in_test-handle", out.value)
+			if err != nil {
+				errs <- err
+			} else if out.value != "test-in_test-handle" {
+				errs <- fmt.Errorf("expected test-in_test-handle, got %s", out.value)
+			}
 		}()
 	}
 
@@ -68,8 +74,11 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			out := <-bus.DispatchResultAsync[testOut](ctx, testIn{value: testValueIn, index: i})
-			checkNoError(t, out.Error)
-			checkEqual(t, "test-in_test-handle", out.Result.value)
+			if out.Error != nil {
+				errs <- out.Error
+			} else if out.Result.value != "test-in_test-handle" {
+				errs <- fmt.Errorf("expected test-in_test-handle, got %s", out.Result.value)
+			}
 		}()
 	}
 
@@ -80,12 +89,20 @@ func TestBus_ResultCommandExecutor_ExecuteComplex(t *testing.T) {
 			defer wg.Done()
 			errExpect := errors.New("test error")
 			out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn, index: i, err: errExpect})
-			checkError(t, err, errExpect)
-			checkEqual(t, "", out.value)
+			if !errors.Is(err, errExpect) {
+				errs <- fmt.Errorf("expected error %s, got %w", errExpect.Error(), err)
+			} else if out.value != "" {
+				errs <- fmt.Errorf("expected empty value, got %s", out.value)
+			}
 		}()
 	}
 
 	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent dispatch result error: %v", err)
+	}
 }
 
 func TestBus_ResultHandlersAreIsolated(t *testing.T) {
@@ -171,6 +188,37 @@ func TestBus_ConcurrentResultRegistrationsPreserveDistinctHandlers(t *testing.T)
 	}
 }
 
+func TestBus_DispatchResultAsyncPreservesPartialResult(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.RegisterResult(&partialResultHandler{})
+
+	envelope := <-bus.DispatchResultAsync[testOut](ctx, testIn{})
+	checkEqual(t, "partial", envelope.Result.value)
+	if envelope.Error == nil || envelope.Error.Error() != "partial failure" {
+		t.Fatalf("expected 'partial failure' error, got %v", envelope.Error)
+	}
+}
+
+func TestBus_DispatchResultAsyncRecoversPanic(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	panicVal := errors.New("result boom")
+	bus.RegisterResult(&panicResultHandler{val: panicVal})
+
+	envelope := <-bus.DispatchResultAsync[testOut](ctx, testIn{})
+	if envelope.Error == nil {
+		t.Fatal("expected panic error, got nil")
+	}
+	var panicErr *gobus.PanicError
+	if !errors.As(envelope.Error, &panicErr) {
+		t.Fatalf("expected *gobus.PanicError, got %T (%v)", envelope.Error, envelope.Error)
+	}
+	if !errors.Is(envelope.Error, panicVal) {
+		t.Fatalf("expected error to unwrap to %v, got %v", panicVal, envelope.Error)
+	}
+}
+
 func TestBus_DispatchResultAllocationBudget(t *testing.T) {
 	ctx := context.Background()
 	bus := gobus.New()
@@ -195,12 +243,7 @@ func TestBus_DispatchResultAllocationBudget(t *testing.T) {
 	}
 }
 
-// Go 1.27.0, median of 5 runs.
-// goos: darwin
-// goarch: arm64
-// cpu: Apple M5 Pro
-// Benchmark_RegisterResult-12     16375870        75.08 ns/op       360 B/op       4 allocs/op.
-func Benchmark_RegisterResult(b *testing.B) {
+func Benchmark_RegisterResultReplace(b *testing.B) {
 	bus := gobus.New()
 
 	for i := 0; i < b.N; i++ {
@@ -208,11 +251,6 @@ func Benchmark_RegisterResult(b *testing.B) {
 	}
 }
 
-// Go 1.27.0, median of 5 runs.
-// goos: darwin
-// goarch: arm64
-// cpu: Apple M5 Pro
-// Benchmark_DispatchResult-12     53863790        22.34 ns/op        24 B/op       1 allocs/op.
 func Benchmark_DispatchResult(b *testing.B) {
 	ctx := context.Background()
 	bus := gobus.New()
@@ -265,6 +303,20 @@ type testOut struct {
 	value string
 }
 
+type partialResultHandler struct{}
+
+func (h *partialResultHandler) Execute(_ context.Context, _ testIn) (testOut, error) {
+	return testOut{value: "partial"}, errors.New("partial failure")
+}
+
+type panicResultHandler struct {
+	val any
+}
+
+func (h *panicResultHandler) Execute(_ context.Context, _ testIn) (testOut, error) {
+	panic(h.val)
+}
+
 func checkError(t *testing.T, err error, targetErr error) {
 	t.Helper()
 
@@ -290,4 +342,62 @@ func checkEqual(t *testing.T, value, expected any) {
 	if expected != value {
 		t.Fatalf("value not equal to expected value: %v != %v", value, expected)
 	}
+}
+
+func TestBus_ZeroValueIsUsable_Result(t *testing.T) {
+	ctx := context.Background()
+	var bus gobus.Bus
+
+	// Unregistered result dispatch returns ErrHandlerNotFound.
+	_, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	checkError(t, err, gobus.ErrHandlerNotFound)
+
+	asyncEnv := <-bus.DispatchResultAsync[testOut](ctx, testIn{value: testValueIn})
+	checkError(t, asyncEnv.Error, gobus.ErrHandlerNotFound)
+
+	// Registering on zero-value bus works.
+	bus.RegisterResult(&testHandle{val: testValueHandle})
+
+	out, err := bus.DispatchResult[testOut](ctx, testIn{value: testValueIn})
+	checkNoError(t, err)
+	checkEqual(t, out.value, testValueIn+"_"+testValueHandle)
+
+	asyncEnv = <-bus.DispatchResultAsync[testOut](ctx, testIn{value: testValueIn})
+	checkNoError(t, asyncEnv.Error)
+	checkEqual(t, asyncEnv.Result.value, testValueIn+"_"+testValueHandle)
+}
+
+func TestBus_DispatchResultInvalidRegistryEntry(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	key := gobus.ResultCommandTypeFor[testIn, testOut]()
+	bus.InjectInvalidResultCommandHandler(key, "not-a-result-handler")
+
+	_, err := bus.DispatchResult[testOut](ctx, testIn{})
+	if !errors.Is(err, gobus.ErrInvalidRegistryEntryForTest) {
+		t.Fatalf("DispatchResult error = %v, want ErrInvalidRegistryEntryForTest", err)
+	}
+}
+
+func TestBus_RegisterResultNilHandlerPanics(t *testing.T) {
+	var bus gobus.Bus
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on nil handler, got nil")
+		}
+	}()
+	bus.RegisterResult[testIn, testOut](nil)
+}
+
+func TestBus_RegisterResultTypedNilHandlerPanics(t *testing.T) {
+	var bus gobus.Bus
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on typed nil handler, got nil")
+		}
+	}()
+	var handler *testHandle
+	bus.RegisterResult[testIn, testOut](handler)
 }

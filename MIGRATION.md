@@ -1,5 +1,19 @@
 # Migrating to the instance-based Bus
 
+## Additions and behavior changes in v1.2.0
+
+Version 1.2.0 replaces internal unsafe registry pointer manipulation with safe,
+atomic copy-on-write typed snapshots (`map[reflect.Type]any`) protected by mutex
+serialization during writes. Readers remain lock-free and observe consistent snapshots.
+
+Key changes and additions:
+
+- **Zero-value `Bus`**: The zero value `var bus gobus.Bus` is ready to use without calling `gobus.New()`. Registration, dispatch, and subscription methods safely initialize the first snapshot on demand.
+- **Unmanaged Async Panic Recovery**: `DispatchAsync` and `DispatchResultAsync` now recover panics raised by handlers and report them as `*gobus.PanicError` through the returned channel or envelope error, preventing uncaught goroutine crashes.
+- **Partial Query Result Preservation**: `DispatchResultAsync` and `async.Runtime.SubmitResult` / `TrySubmitResult` preserve partial results returned by query handlers alongside the error (`Envelope.Result` and `Envelope.Error` are both populated).
+- **Nil Admission Context Protection**: Managed submission methods (`Submit`, `SubmitResult`, `SubmitEvent`, and their `Try` variants) and `Runtime.Shutdown` validate context arguments and return `async.ErrNilContext` when passed `nil`.
+- **`async.PanicError` Alias**: `async.PanicError` is now a type alias for `gobus.PanicError`, ensuring uniform `errors.As` and `errors.Is` handling across managed and unmanaged asynchronous paths.
+
 ## Additions in v1.1.0
 
 Version 1.1.0 is backward compatible with v1.0.0. Existing command and query
@@ -38,7 +52,7 @@ The Go 1.27 API removes the package-level registries and functions. There is no 
 ## Requirements
 
 - Go 1.27 or later.
-- Construct each bus with `gobus.New()` and pass `*gobus.Bus` through the application's composition root.
+- Construct each bus with `gobus.New()` or use the zero value `gobus.Bus`, and pass `*gobus.Bus` through the application's composition root.
 - Do not copy a bus after first use.
 
 ## Registration and dispatch

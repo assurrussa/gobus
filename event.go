@@ -3,29 +3,43 @@ package gobus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
-	"sync/atomic"
-	"unsafe"
 )
-
-type dataMapEvent[E ObjectIn] map[reflect.Type][]EventExecutor[E]
 
 // Subscribe adds handler to the subscribers for events of type E.
 // Each call adds a distinct subscription that lives for the lifetime of b.
+// It panics if handler is nil.
 func (b *Bus) Subscribe[E ObjectIn](handler EventExecutor[E]) {
+	if isNil(handler) {
+		panic("gobus: nil handler")
+	}
+
 	b.registerMu.Lock()
 	defer b.registerMu.Unlock()
 
-	newData := maps.Clone(b.loadDataEventReadOnly[E]())
+	current := b.events.Load()
+	var newData map[reflect.Type]any
+	if current != nil {
+		newData = maps.Clone(*current)
+	} else {
+		newData = make(map[reflect.Type]any)
+	}
 	key := reflect.TypeFor[E]()
-	current := newData[key]
-	handlers := make([]EventExecutor[E], len(current)+1)
-	copy(handlers, current)
-	handlers[len(current)] = handler
+	var handlers []EventExecutor[E]
+	if existing, ok := newData[key]; ok {
+		if currentHandlers, ok := existing.([]EventExecutor[E]); ok {
+			handlers = make([]EventExecutor[E], len(currentHandlers)+1)
+			copy(handlers, currentHandlers)
+			handlers[len(currentHandlers)] = handler
+		}
+	}
+	if handlers == nil {
+		handlers = []EventExecutor[E]{handler}
+	}
 	newData[key] = handlers
-	pointer := unsafe.Pointer(&newData)
-	atomic.StorePointer(&b.dataEvent, pointer)
+	b.events.Store(&newData)
 }
 
 // Publish executes a snapshot of the subscribers for event's type in
@@ -33,7 +47,20 @@ func (b *Bus) Subscribe[E ObjectIn](handler EventExecutor[E]) {
 // Publishing an event with no subscribers succeeds.
 func (b *Bus) Publish[E ObjectIn](ctx context.Context, event E) error {
 	key := reflect.TypeFor[E]()
-	handlers := b.loadDataEventReadOnly[E]()[key]
+	current := b.events.Load()
+	if current == nil {
+		return nil
+	}
+
+	value, ok := (*current)[key]
+	if !ok {
+		return nil
+	}
+
+	handlers, ok := value.([]EventExecutor[E])
+	if !ok {
+		return fmt.Errorf("%w for %s", errInvalidRegistryEntry, key)
+	}
 
 	var publishErrors []error
 	for _, handler := range handlers {
@@ -43,10 +70,4 @@ func (b *Bus) Publish[E ObjectIn](ctx context.Context, event E) error {
 	}
 
 	return errors.Join(publishErrors...)
-}
-
-func (b *Bus) loadDataEventReadOnly[E ObjectIn]() dataMapEvent[E] {
-	pointer := atomic.LoadPointer(&b.dataEvent)
-
-	return *(*dataMapEvent[E])(pointer)
 }

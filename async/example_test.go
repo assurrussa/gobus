@@ -15,13 +15,27 @@ func ExampleRuntime() {
 	bus := gobus.New()
 	bus.Register(exampleCommandHandler{})
 
-	runtime, _ := busasync.New(bus, busasync.QueueConfig{Capacity: 16, Workers: 2})
-	_ = runtime.Start()
+	runtime, err := busasync.New(bus, busasync.QueueConfig{Capacity: 16, Workers: 2})
+	if err != nil {
+		fmt.Printf("new runtime: %v\n", err)
+		return
+	}
+	if err := runtime.Start(); err != nil {
+		fmt.Printf("start: %v\n", err)
+		return
+	}
 
-	result, _ := runtime.Submit(ctx, exampleCommand{value: "hello"})
+	result, err := runtime.Submit(ctx, exampleCommand{value: "hello"})
+	if err != nil {
+		fmt.Printf("submit: %v\n", err)
+		return
+	}
 	_, _ = fmt.Fprintln(os.Stdout, <-result)
 
-	_ = runtime.Shutdown(ctx)
+	if err := runtime.Shutdown(ctx); err != nil {
+		fmt.Printf("shutdown: %v\n", err)
+		return
+	}
 	// Output: <nil>
 }
 

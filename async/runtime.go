@@ -36,7 +36,7 @@ type QueueConfig struct {
 	Workers  int
 }
 
-// QueueStats is a point-in-time snapshot for one queue.
+// QueueStats contains individually sampled metrics for one queue.
 type QueueStats struct {
 	Capacity  int
 	Workers   int
@@ -47,7 +47,8 @@ type QueueStats struct {
 	Rejected  uint64
 }
 
-// Stats is a point-in-time snapshot of a Runtime and all its queues.
+// Stats contains a best-effort runtime and queue metrics snapshot.
+// Values from different fields need not represent the same instant.
 type Stats struct {
 	State  State
 	Queues map[string]QueueStats
@@ -226,6 +227,10 @@ func (r *Runtime) Start() error {
 // Shutdown on its own Runtime waits for every worker, including itself, and
 // blocks until ctx expires if it cannot return first.
 func (r *Runtime) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+
 	first, alreadyClosed := r.beginShutdown()
 	if alreadyClosed {
 		return nil
@@ -365,6 +370,10 @@ func (r *Runtime) execute(configuredQueue *queue, job queuedJob) {
 }
 
 // Stats returns a concurrency-safe snapshot of runtime and queue state.
+// Because queue depth and counters are individually atomic and update
+// concurrently with running workers, the result is a best-effort,
+// eventually consistent metrics snapshot rather than a linearizable
+// point-in-time state.
 func (r *Runtime) Stats() Stats {
 	r.mu.Lock()
 	defer r.mu.Unlock()

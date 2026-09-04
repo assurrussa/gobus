@@ -2,12 +2,15 @@ package async
 
 import (
 	"errors"
-	"fmt"
+
+	"github.com/assurrussa/gobus"
 )
 
 var (
 	// ErrNilBus is returned when New receives a nil bus.
 	ErrNilBus = errors.New("async: nil bus")
+	// ErrNilContext is returned when submission or shutdown receives a nil context.
+	ErrNilContext = errors.New("async: nil context")
 	// ErrInvalidQueueConfig is returned for non-positive queue capacity or worker count.
 	ErrInvalidQueueConfig = errors.New("async: invalid queue config")
 	// ErrQueueExists is returned when a queue name is already configured.
@@ -31,18 +34,5 @@ var (
 )
 
 // PanicError reports a panic recovered while a managed job was executing.
-type PanicError struct {
-	Value any
-	Stack string
-}
-
-// Error implements error.
-func (e *PanicError) Error() string {
-	return fmt.Sprintf("async: handler panic: %v", e.Value)
-}
-
-// Unwrap exposes a recovered error value to errors.Is and errors.As.
-func (e *PanicError) Unwrap() error {
-	err, _ := e.Value.(error)
-	return err
-}
+// It is an alias for gobus.PanicError.
+type PanicError = gobus.PanicError

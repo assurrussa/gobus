@@ -110,6 +110,63 @@ func TestPublicAPI(t *testing.T) {
 	if _, err := bus.DispatchResult[string](ctx, query{id: 7}); !errors.Is(err, gobus.ErrHandlerNotFound) {
 		t.Fatalf("DispatchResult wrong output error = %v, want ErrHandlerNotFound", err)
 	}
+
+	var cmd any = command{id: 7}
+	if err := bus.Dispatch(ctx, cmd); !errors.Is(err, gobus.ErrHandlerNotFound) {
+		t.Fatalf("Dispatch interface variable error = %v, want ErrHandlerNotFound", err)
+	}
+
+	partialErr := errors.New("partial")
+	bus.RegisterResult(partialQueryHandler{err: partialErr})
+	partialEnvelope := <-bus.DispatchResultAsync[output](ctx, partialQuery{id: 99})
+	if partialEnvelope.Result.id != 99 || !errors.Is(partialEnvelope.Error, partialErr) {
+		t.Fatalf("DispatchResultAsync partial = %+v, want id 99 and partialErr", partialEnvelope)
+	}
+}
+
+func TestPublicAPI_ZeroValueBus(t *testing.T) {
+	ctx := context.Background()
+	var bus gobus.Bus
+
+	if err := bus.Dispatch(ctx, command{id: 1}); !errors.Is(err, gobus.ErrHandlerNotFound) {
+		t.Fatalf("Dispatch unregistered error = %v, want ErrHandlerNotFound", err)
+	}
+	if _, err := bus.DispatchResult[output](ctx, query{id: 1}); !errors.Is(err, gobus.ErrHandlerNotFound) {
+		t.Fatalf("DispatchResult unregistered error = %v, want ErrHandlerNotFound", err)
+	}
+	if err := bus.Publish(ctx, event{id: 1}); err != nil {
+		t.Fatalf("Publish unregistered error = %v, want nil", err)
+	}
+
+	bus.Register(commandHandler{})
+	bus.RegisterResult(queryHandler{})
+	bus.Subscribe(eventHandler{})
+
+	if err := bus.Dispatch(ctx, command{id: 42}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	res, err := bus.DispatchResult[output](ctx, query{id: 42})
+	if err != nil {
+		t.Fatalf("DispatchResult: %v", err)
+	}
+	if res.id != 42 {
+		t.Fatalf("DispatchResult id = %d, want 42", res.id)
+	}
+	if err := bus.Publish(ctx, event{id: 42}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+}
+
+type partialQuery struct {
+	id int
+}
+
+type partialQueryHandler struct {
+	err error
+}
+
+func (h partialQueryHandler) Execute(_ context.Context, dto partialQuery) (output, error) {
+	return output{id: dto.id}, h.err
 }
 
 type command struct {

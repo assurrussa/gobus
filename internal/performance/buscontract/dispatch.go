@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -25,7 +26,10 @@ type Envelope[T objectOut] struct {
 type dataMap[Q objectIn, T objectOut] map[string]Command[Q, T]
 
 // data Current pointer for dataMap.
-var data unsafe.Pointer
+var (
+	data       unsafe.Pointer
+	registerMu sync.Mutex
+)
 
 func init() {
 	pointer := unsafe.Pointer(&dataMap[defaultIn, any]{})
@@ -33,6 +37,9 @@ func init() {
 }
 
 func Register[Q objectIn, T objectOut](q Q, handler Command[Q, T]) {
+	registerMu.Lock()
+	defer registerMu.Unlock()
+
 	newData := maps.Clone(loadDataReadOnly[Q, T]())
 	newData[q.Key()] = handler
 	pointer := unsafe.Pointer(&newData)
