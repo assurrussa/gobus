@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -333,4 +334,31 @@ func TestBus_RegisterTypedNilHandlerPanics(t *testing.T) {
 	}()
 	var handler *testHandleCommand
 	bus.Register[testIn](handler)
+}
+
+type testGoexitIn struct{}
+
+type testGoexitCommand struct{}
+
+func (h *testGoexitCommand) Execute(_ context.Context, _ testGoexitIn) error {
+	runtime.Goexit()
+	return nil
+}
+
+func TestBus_DispatchAsyncReportsGoexit(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	bus.Register(&testGoexitCommand{})
+
+	ch := bus.DispatchAsync(ctx, testGoexitIn{})
+	err, ok := <-ch
+	if !ok {
+		t.Fatal("channel closed without yielding a result")
+	}
+	if !errors.Is(err, gobus.ErrHandlerGoexit) {
+		t.Fatalf("expected ErrHandlerGoexit, got %v", err)
+	}
+	if _, ok := <-ch; ok {
+		t.Fatal("channel yielded more than one result")
+	}
 }

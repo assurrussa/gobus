@@ -36,3 +36,7 @@ var (
 // PanicError reports a panic recovered while a managed job was executing.
 // It is an alias for gobus.PanicError.
 type PanicError = gobus.PanicError
+
+// ErrHandlerGoexit is reported when an asynchronous handler terminates via runtime.Goexit.
+// It is an alias for gobus.ErrHandlerGoexit.
+var ErrHandlerGoexit = gobus.ErrHandlerGoexit

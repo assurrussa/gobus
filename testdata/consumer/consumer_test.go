@@ -122,6 +122,10 @@ func TestPublicAPI(t *testing.T) {
 	if partialEnvelope.Result.id != 99 || !errors.Is(partialEnvelope.Error, partialErr) {
 		t.Fatalf("DispatchResultAsync partial = %+v, want id 99 and partialErr", partialEnvelope)
 	}
+
+	if !errors.Is(busasync.ErrHandlerGoexit, gobus.ErrHandlerGoexit) {
+		t.Fatalf("busasync.ErrHandlerGoexit is not gobus.ErrHandlerGoexit")
+	}
 }
 
 func TestPublicAPI_ZeroValueBus(t *testing.T) {

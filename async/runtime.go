@@ -107,8 +107,13 @@ type Runtime struct {
 	forceContext context.Context //nolint:containedctx // Runtime cancellation must reach every active job.
 	forceCancel  context.CancelCauseFunc
 
+	cancelMu sync.Mutex
+
 	admissions sync.WaitGroup
 	workers    sync.WaitGroup
+
+	afterBeginAdmissionForTest func()
+	beforeWorkersWaitForTest   func()
 }
 
 // New constructs a configurable Runtime with a required default queue.
@@ -294,7 +299,19 @@ func (r *Runtime) drain() {
 	}
 	r.mu.Unlock()
 
+	if context.Cause(r.forceContext) != nil {
+		r.cancelPending()
+	}
+
+	if r.beforeWorkersWaitForTest != nil {
+		r.beforeWorkersWaitForTest()
+	}
 	r.workers.Wait()
+
+	// A concurrent cancelPending may still own a dequeued job and its result.
+	// Publish completion only after that cleanup has finished resolving jobs.
+	r.cancelMu.Lock()
+	defer r.cancelMu.Unlock()
 
 	r.mu.Lock()
 	r.state = StateClosed
@@ -303,6 +320,9 @@ func (r *Runtime) drain() {
 }
 
 func (r *Runtime) cancelPending() {
+	r.cancelMu.Lock()
+	defer r.cancelMu.Unlock()
+
 	r.mu.Lock()
 	queues := make([]*queue, 0, len(r.queues))
 	for _, configuredQueue := range r.queues {
@@ -328,11 +348,30 @@ func (r *Runtime) cancelPending() {
 }
 
 func (r *Runtime) worker(configuredQueue *queue) {
-	defer r.workers.Done()
+	var normalExit bool
+	defer func() {
+		if !normalExit {
+			r.handleAbnormalWorkerExit(configuredQueue)
+		} else {
+			r.workers.Done()
+		}
+	}()
 
 	for job := range configuredQueue.jobs {
 		r.execute(configuredQueue, job)
 	}
+	normalExit = true
+}
+
+func (r *Runtime) handleAbnormalWorkerExit(configuredQueue *queue) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.state == StateRunning || r.state == StateClosing {
+		go r.worker(configuredQueue)
+		return
+	}
+	r.workers.Done()
 }
 
 func (r *Runtime) execute(configuredQueue *queue, job queuedJob) {
@@ -360,13 +399,19 @@ func (r *Runtime) execute(configuredQueue *queue, job queuedJob) {
 	defer configuredQueue.active.Add(-1)
 	defer configuredQueue.completed.Add(1)
 
+	var normalReturn bool
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			job.resolve(&PanicError{Value: recovered, Stack: string(debug.Stack())})
+		if !normalReturn {
+			if recovered := recover(); recovered != nil {
+				job.resolve(&PanicError{Value: recovered, Stack: string(debug.Stack())})
+			} else {
+				job.resolve(ErrHandlerGoexit)
+			}
 		}
 	}()
 
 	job.run(executionContext)
+	normalReturn = true
 }
 
 // Stats returns a concurrency-safe snapshot of runtime and queue state.

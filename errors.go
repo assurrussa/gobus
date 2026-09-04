@@ -8,6 +8,9 @@ import (
 // ErrHandlerNotFound is returned when a bus has no handler for the requested types.
 var ErrHandlerNotFound = errors.New("not found handler")
 
+// ErrHandlerGoexit is reported when an asynchronous handler terminates via runtime.Goexit.
+var ErrHandlerGoexit = errors.New("gobus: handler exited via runtime.Goexit")
+
 // errInvalidRegistryEntry is returned when an internal registry entry does not
 // match the expected executor contract.
 var errInvalidRegistryEntry = errors.New("invalid registry entry")
