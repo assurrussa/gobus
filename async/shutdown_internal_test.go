@@ -3,6 +3,7 @@ package async
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,79 @@ func TestRuntimeShutdownWaitsForPendingResolution(t *testing.T) {
 	if q.Accepted != 2 || q.Completed != 2 || q.Depth != 0 || q.Active != 0 {
 		t.Fatalf("stats after shutdown = %+v", q)
 	}
+}
+
+func TestRuntimeExecuteSkipsJobWhenForceContextCancelled(t *testing.T) {
+	rt, err := New(gobus.New(), QueueConfig{Capacity: 1, Workers: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rt.forceCancel(ErrRuntimeShutdown)
+
+	configuredQueue := rt.queues[DefaultQueueName]
+	result := make(chan error, 1)
+	ran := false
+	rt.execute(configuredQueue, queuedJob{
+		executionContext: context.Background(),
+		run: func(context.Context) {
+			ran = true
+		},
+		resolve: func(err error) {
+			result <- err
+			close(result)
+		},
+	})
+	if ran {
+		t.Fatal("job ran after forceContext cancellation")
+	}
+	assertShutdownResult(t, result)
+	if got := configuredQueue.completed.Load(); got != 1 {
+		t.Fatalf("completed = %d, want 1", got)
+	}
+}
+
+func TestRuntimeWorkerGoexitDuringForcedShutdown(t *testing.T) {
+	bus := gobus.New()
+	started := make(chan struct{})
+	bus.Register(goexitOnCancelHandler{started: started})
+
+	rt, err := New(bus, QueueConfig{Capacity: 1, Workers: 1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := rt.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	result, err := rt.Submit(context.Background(), goexitOnCancelCommand{})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	awaitShutdownSignal(t, started, "handler start before forced shutdown")
+
+	shutdownCtx, cancelShutdown := context.WithCancel(context.Background())
+	cancelShutdown()
+	if err := rt.Shutdown(shutdownCtx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("forced Shutdown = %v, want Canceled", err)
+	}
+
+	if err := awaitShutdownError(t, result); !errors.Is(err, ErrHandlerGoexit) {
+		t.Fatalf("job result = %v, want ErrHandlerGoexit", err)
+	}
+	finishRuntimeShutdown(t, rt)
+}
+
+type goexitOnCancelCommand struct{}
+
+type goexitOnCancelHandler struct {
+	started chan<- struct{}
+}
+
+func (h goexitOnCancelHandler) Execute(ctx context.Context, _ goexitOnCancelCommand) error {
+	close(h.started)
+	<-ctx.Done()
+	runtime.Goexit()
+	return nil
 }
 
 func TestRuntimeForcedShutdownResolvesLateEnqueue(t *testing.T) {

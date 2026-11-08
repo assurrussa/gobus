@@ -364,14 +364,11 @@ func (r *Runtime) worker(configuredQueue *queue) {
 }
 
 func (r *Runtime) handleAbnormalWorkerExit(configuredQueue *queue) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.state == StateRunning || r.state == StateClosing {
-		go r.worker(configuredQueue)
+	if context.Cause(r.forceContext) != nil {
+		r.workers.Done()
 		return
 	}
-	r.workers.Done()
+	go r.worker(configuredQueue)
 }
 
 func (r *Runtime) execute(configuredQueue *queue, job queuedJob) {

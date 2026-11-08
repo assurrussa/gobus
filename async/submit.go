@@ -211,9 +211,6 @@ func (r *Runtime) enqueue(admissionContext context.Context, key routeKey, job qu
 
 	if try {
 		select {
-		case <-r.closing:
-			configuredQueue.rejected.Add(1)
-			return ErrRuntimeClosed
 		case configuredQueue.jobs <- job:
 			configuredQueue.accepted.Add(1)
 			return nil
