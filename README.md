@@ -31,11 +31,13 @@ The instance-based API is available starting with `v1.0.0`; events and the
 managed async runtime are available starting with `v1.1.0`; safe registry
 copy-on-write, partial result preservation, and asynchronous panic recovery are
 available starting with `v1.2.0`; `runtime.Goexit` abnormal exit handling and
-forced shutdown admission coordination are available starting with `v1.2.1`.
+forced shutdown admission coordination are available starting with `v1.2.1`;
+forced-shutdown worker retirement refinements and expanded test coverage are
+available starting with `v1.2.2`.
 `v0.9.1` contains the legacy package-level API.
 
 ```sh
-go get github.com/assurrussa/gobus@v1.2.1
+go get github.com/assurrussa/gobus@v1.2.2
 ```
 
 Then import the package:

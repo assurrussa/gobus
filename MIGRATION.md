@@ -1,5 +1,14 @@
 # Migrating to the instance-based Bus
 
+## Additions and behavior changes in v1.2.2
+
+Version 1.2.2 is a maintenance release with no public API changes.
+
+Key refinements:
+
+- **Forced-Shutdown Worker Retirement on `runtime.Goexit`**: When a managed worker exits via `runtime.Goexit()` after forced shutdown has already been triggered, `async.Runtime` retires the worker directly instead of spawning a short-lived replacement goroutine.
+- **Expanded Verification Coverage**: Public library statement coverage is expanded to `100.0%` in `gobus` and `98.1%` in `gobus/async` (`98%` combined), with deterministic synchronization for blocking queue admission tests.
+
 ## Additions and behavior changes in v1.2.1
 
 Version 1.2.1 hardens asynchronous execution against abnormal handler termination and coordinates forced shutdown admissions.
