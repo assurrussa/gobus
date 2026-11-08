@@ -287,6 +287,14 @@ func TestRuntimeTrySubmitRejectsFullQueue(t *testing.T) {
 	if third != nil || !errors.Is(err, busasync.ErrQueueFull) {
 		t.Fatalf("TrySubmit(full) = (%v, %v), want (nil, ErrQueueFull)", third, err)
 	}
+	thirdQuery, err := runtime.TrySubmitResult[testOutput](ctx, testQuery{id: 3})
+	if thirdQuery != nil || !errors.Is(err, busasync.ErrQueueFull) {
+		t.Fatalf("TrySubmitResult(full) = (%v, %v), want (nil, ErrQueueFull)", thirdQuery, err)
+	}
+	thirdEvent, err := runtime.TrySubmitEvent(ctx, testEvent{id: 3})
+	if thirdEvent != nil || !errors.Is(err, busasync.ErrQueueFull) {
+		t.Fatalf("TrySubmitEvent(full) = (%v, %v), want (nil, ErrQueueFull)", thirdEvent, err)
+	}
 
 	cancelledContext, cancel := context.WithCancel(ctx)
 	cancel()
@@ -306,8 +314,8 @@ func TestRuntimeTrySubmitRejectsFullQueue(t *testing.T) {
 		return runtime.Stats().Queues[busasync.DefaultQueueName].Completed == 2
 	}, "full queue completion")
 	stats := runtime.Stats().Queues[busasync.DefaultQueueName]
-	if stats.Accepted != 2 || stats.Rejected != 2 {
-		t.Fatalf("queue stats = %+v, want accepted=2 rejected=2", stats)
+	if stats.Accepted != 2 || stats.Rejected != 4 {
+		t.Fatalf("queue stats = %+v, want accepted=2 rejected=4", stats)
 	}
 }
 
@@ -423,6 +431,10 @@ func TestRuntimeCancelledExecutionContextSkipsHandler(t *testing.T) {
 		calls.Add(1)
 		return nil
 	}})
+	bus.Subscribe(eventHandler[testEvent]{execute: func(_ context.Context, _ testEvent) error {
+		calls.Add(1)
+		return nil
+	}})
 	runtime := newRuntime(t, bus, validQueueConfig())
 	startRuntime(t, runtime)
 
@@ -438,6 +450,17 @@ func TestRuntimeCancelledExecutionContextSkipsHandler(t *testing.T) {
 	}
 	if err := receiveError(t, result); !errors.Is(err, context.Canceled) {
 		t.Fatalf("execution result = %v, want context.Canceled", err)
+	}
+	eventResult, err := runtime.SubmitEvent(
+		context.Background(),
+		testEvent{},
+		busasync.WithExecutionContext(executionContext),
+	)
+	if err != nil {
+		t.Fatalf("SubmitEvent() admission error = %v", err)
+	}
+	if err := receiveError(t, eventResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("event execution result = %v, want context.Canceled", err)
 	}
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("handler calls = %d, want 0", got)
@@ -555,6 +578,14 @@ func TestRuntimeRejectsInvalidSubmitOptions(t *testing.T) {
 			result, err := runtime.Submit(context.Background(), testCommand{}, test.option)
 			if result != nil || !errors.Is(err, busasync.ErrInvalidSubmitOption) {
 				t.Fatalf("Submit() = (%v, %v), want (nil, ErrInvalidSubmitOption)", result, err)
+			}
+			queryResult, err := runtime.SubmitResult[testOutput](context.Background(), testQuery{}, test.option)
+			if queryResult != nil || !errors.Is(err, busasync.ErrInvalidSubmitOption) {
+				t.Fatalf("SubmitResult() = (%v, %v), want (nil, ErrInvalidSubmitOption)", queryResult, err)
+			}
+			eventResult, err := runtime.SubmitEvent(context.Background(), testEvent{}, test.option)
+			if eventResult != nil || !errors.Is(err, busasync.ErrInvalidSubmitOption) {
+				t.Fatalf("SubmitEvent() = (%v, %v), want (nil, ErrInvalidSubmitOption)", eventResult, err)
 			}
 		})
 	}
@@ -1061,6 +1092,10 @@ func TestBlockedSubmitWakesWhenShutdownStarts(t *testing.T) {
 		t.Fatalf("second Submit() error = %v", err)
 	}
 
+	admissionEntered := make(chan struct{})
+	runtime.SetAfterBeginAdmissionForTest(func() {
+		close(admissionEntered)
+	})
 	blockedResult := make(chan error, 1)
 	go func() {
 		result, submitErr := runtime.Submit(ctx, testCommand{id: 3})
@@ -1070,9 +1105,7 @@ func TestBlockedSubmitWakesWhenShutdownStarts(t *testing.T) {
 		}
 		blockedResult <- submitErr
 	}()
-	waitFor(t, func() bool {
-		return runtime.Stats().Queues[busasync.DefaultQueueName].Depth == 1
-	}, "full queue before shutdown")
+	receiveSignal(t, admissionEntered, "third Submit entering enqueue")
 
 	shutdownContext, cancelShutdown := context.WithCancel(ctx)
 	shutdownResult := make(chan error, 1)
@@ -1097,6 +1130,57 @@ func TestBlockedSubmitWakesWhenShutdownStarts(t *testing.T) {
 	}
 	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatalf("final Shutdown() error = %v", err)
+	}
+}
+
+func TestBlockedSubmitUnblocksOnAdmissionContextCancel(t *testing.T) {
+	ctx := context.Background()
+	bus := gobus.New()
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	bus.Register(commandHandler[testCommand]{execute: func(_ context.Context, _ testCommand) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	}})
+	runtime := newRuntime(t, bus, busasync.QueueConfig{Capacity: 1, Workers: 1})
+	startRuntime(t, runtime)
+	first, err := runtime.Submit(ctx, testCommand{id: 1})
+	if err != nil {
+		t.Fatalf("first Submit() error = %v", err)
+	}
+	receiveSignal(t, started, "blocked-cancel handler start")
+	second, err := runtime.Submit(ctx, testCommand{id: 2})
+	if err != nil {
+		t.Fatalf("second Submit() error = %v", err)
+	}
+
+	admissionEntered := make(chan struct{})
+	runtime.SetAfterBeginAdmissionForTest(func() {
+		close(admissionEntered)
+	})
+	thirdCtx, cancelThird := context.WithCancel(ctx)
+	blockedResult := make(chan error, 1)
+	go func() {
+		result, submitErr := runtime.Submit(thirdCtx, testCommand{id: 3})
+		if result != nil {
+			blockedResult <- errors.New("cancelled blocked Submit returned a result channel")
+			return
+		}
+		blockedResult <- submitErr
+	}()
+	receiveSignal(t, admissionEntered, "third Submit entering enqueue before cancel")
+	cancelThird()
+	if err := receiveError(t, blockedResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("blocked Submit error = %v, want context.Canceled", err)
+	}
+
+	close(release)
+	if err := receiveError(t, first); err != nil {
+		t.Fatalf("first result = %v", err)
+	}
+	if err := receiveError(t, second); err != nil {
+		t.Fatalf("second result = %v", err)
 	}
 }
 
@@ -1231,8 +1315,16 @@ func TestRuntimeWorkerGoexitRecovery(t *testing.T) {
 			return nil
 		},
 	})
+	bus.Subscribe(eventHandler[testEvent]{
+		execute: func(_ context.Context, evt testEvent) error {
+			if evt.id == 1 {
+				runtime.Goexit()
+			}
+			return nil
+		},
+	})
 
-	rt := newRuntime(t, bus, busasync.QueueConfig{Capacity: 2, Workers: 1})
+	rt := newRuntime(t, bus, busasync.QueueConfig{Capacity: 3, Workers: 1})
 	startRuntime(t, rt)
 
 	first, err := rt.Submit(ctx, testCommand{id: 1})
@@ -1242,6 +1334,10 @@ func TestRuntimeWorkerGoexitRecovery(t *testing.T) {
 	second, err := rt.Submit(ctx, testCommand{id: 2})
 	if err != nil {
 		t.Fatalf("second Submit() error = %v", err)
+	}
+	thirdEvent, err := rt.SubmitEvent(ctx, testEvent{id: 1})
+	if err != nil {
+		t.Fatalf("third SubmitEvent() error = %v", err)
 	}
 
 	firstErr := receiveError(t, first)
@@ -1254,6 +1350,11 @@ func TestRuntimeWorkerGoexitRecovery(t *testing.T) {
 		t.Fatalf("second job error = %v, want nil", secondErr)
 	}
 
+	thirdErr := receiveError(t, thirdEvent)
+	if !errors.Is(thirdErr, busasync.ErrHandlerGoexit) {
+		t.Fatalf("third event error = %v, want ErrHandlerGoexit", thirdErr)
+	}
+
 	if err := rt.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown error = %v", err)
 	}
@@ -1263,8 +1364,8 @@ func TestRuntimeWorkerGoexitRecovery(t *testing.T) {
 	if qStats.Depth != 0 {
 		t.Fatalf("queue depth = %d, want 0", qStats.Depth)
 	}
-	if qStats.Completed != 2 {
-		t.Fatalf("completed = %d, want 2", qStats.Completed)
+	if qStats.Completed != 3 {
+		t.Fatalf("completed = %d, want 3", qStats.Completed)
 	}
 }
 

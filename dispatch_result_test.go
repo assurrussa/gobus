@@ -218,6 +218,12 @@ func TestBus_DispatchResultAsyncRecoversPanic(t *testing.T) {
 	if !errors.Is(envelope.Error, panicVal) {
 		t.Fatalf("expected error to unwrap to %v, got %v", panicVal, envelope.Error)
 	}
+	if panicErr.Error() != "gobus: handler panic: result boom" {
+		t.Fatalf("expected error message %q, got %q", "gobus: handler panic: result boom", panicErr.Error())
+	}
+	if panicErr.Stack == "" {
+		t.Fatal("expected non-empty panic stack")
+	}
 }
 
 func TestBus_DispatchResultAllocationBudget(t *testing.T) {

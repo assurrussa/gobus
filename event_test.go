@@ -24,6 +24,11 @@ func TestBus_PublishWithoutSubscribersSucceeds(t *testing.T) {
 	if err := bus.Publish(context.Background(), testEvent{value: "unused"}); err != nil {
 		t.Fatalf("Publish() error = %v, want nil", err)
 	}
+
+	bus.Subscribe(&countingPointerEventHandler{})
+	if err := bus.Publish(context.Background(), testEvent{value: "still-unsubscribed"}); err != nil {
+		t.Fatalf("Publish() with other event subscribed error = %v, want nil", err)
+	}
 }
 
 func TestBus_PublishCallsAllSubscribersInOrderAndJoinsErrors(t *testing.T) {
