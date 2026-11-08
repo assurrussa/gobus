@@ -1092,20 +1092,21 @@ func TestBlockedSubmitWakesWhenShutdownStarts(t *testing.T) {
 		t.Fatalf("second Submit() error = %v", err)
 	}
 
-	admissionEntered := make(chan struct{})
-	runtime.SetAfterBeginAdmissionForTest(func() {
-		close(admissionEntered)
-	})
+	selectEntered := make(chan struct{})
+	thirdCtx := selectSignalingContext{
+		Context: ctx,
+		onDone:  sync.OnceFunc(func() { close(selectEntered) }),
+	}
 	blockedResult := make(chan error, 1)
 	go func() {
-		result, submitErr := runtime.Submit(ctx, testCommand{id: 3})
+		result, submitErr := runtime.Submit(thirdCtx, testCommand{id: 3})
 		if result != nil {
 			blockedResult <- errors.New("blocked Submit returned a result channel")
 			return
 		}
 		blockedResult <- submitErr
 	}()
-	receiveSignal(t, admissionEntered, "third Submit entering enqueue")
+	receiveSignal(t, selectEntered, "third Submit entering blocking select")
 
 	shutdownContext, cancelShutdown := context.WithCancel(ctx)
 	shutdownResult := make(chan error, 1)
@@ -1155,11 +1156,12 @@ func TestBlockedSubmitUnblocksOnAdmissionContextCancel(t *testing.T) {
 		t.Fatalf("second Submit() error = %v", err)
 	}
 
-	admissionEntered := make(chan struct{})
-	runtime.SetAfterBeginAdmissionForTest(func() {
-		close(admissionEntered)
-	})
-	thirdCtx, cancelThird := context.WithCancel(ctx)
+	baseCtx, cancelThird := context.WithCancel(ctx)
+	selectEntered := make(chan struct{})
+	thirdCtx := selectSignalingContext{
+		Context: baseCtx,
+		onDone:  sync.OnceFunc(func() { close(selectEntered) }),
+	}
 	blockedResult := make(chan error, 1)
 	go func() {
 		result, submitErr := runtime.Submit(thirdCtx, testCommand{id: 3})
@@ -1169,7 +1171,7 @@ func TestBlockedSubmitUnblocksOnAdmissionContextCancel(t *testing.T) {
 		}
 		blockedResult <- submitErr
 	}()
-	receiveSignal(t, admissionEntered, "third Submit entering enqueue before cancel")
+	receiveSignal(t, selectEntered, "third Submit entering blocking select before cancel")
 	cancelThird()
 	if err := receiveError(t, blockedResult); !errors.Is(err, context.Canceled) {
 		t.Fatalf("blocked Submit error = %v, want context.Canceled", err)
@@ -1182,6 +1184,18 @@ func TestBlockedSubmitUnblocksOnAdmissionContextCancel(t *testing.T) {
 	if err := receiveError(t, second); err != nil {
 		t.Fatalf("second result = %v", err)
 	}
+}
+
+type selectSignalingContext struct {
+	context.Context //nolint:containedctx // Test context wrapper signals when enqueue evaluates Done in its blocking select.
+	onDone          func()
+}
+
+func (c selectSignalingContext) Done() <-chan struct{} {
+	if c.onDone != nil {
+		c.onDone()
+	}
+	return c.Context.Done()
 }
 
 func TestRuntimeResultChannelsDoNotBlockShutdownWhenUnread(t *testing.T) {
